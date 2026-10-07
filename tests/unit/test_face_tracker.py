@@ -69,6 +69,7 @@ def test_tracker_keeps_one_frame_in_flight_and_converts_backend_result(tmp_path)
     assert tracker.submit(video_frame(10, 2_000_000_000))
     assert not tracker.submit(video_frame(11, 2_033_000_000))
     created[0].complete(face_result())
+    assert not tracker.submit(video_frame(12, 2_066_000_000))
     result = tracker.poll_latest()
 
     assert result.status is TrackingStatus.TRACKED

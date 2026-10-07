@@ -132,7 +132,10 @@ class MediaPipeFaceTracker:
                 raise StageError("Tracking frames must have increasing IDs and timestamps")
             self._last_frame_id = frame.frame_id
             self._last_timestamp_ns = frame.timestamp_ns
-            if self._pending is not None:
+            # A completed result still owns its retained input until poll_latest consumes it.
+            # Accepting another frame here could replace the UI's one matching frame before
+            # the completed result is observed.
+            if self._pending is not None or self._latest is not None:
                 return False
             timestamp_ms = max(frame.timestamp_ns // 1_000_000, self._last_timestamp_ms + 1)
             self._last_timestamp_ms = timestamp_ms

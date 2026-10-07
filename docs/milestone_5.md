@@ -55,8 +55,9 @@ results depend on face size, the number of nonzero reference weights, CPU, and c
   than combining geometry with an unrelated camera frame.
 - Canonical frames remain unmirrored. Mirroring is still a local display transform after
   processing.
-- Renderer output remains full-frame RGB plus float32 alpha even when implementation work
-  is limited to a face region.
+- Renderer output was initially full-frame RGB plus float32 alpha. Milestone 8 extends the
+  contract with an explicit `active_region`, allowing unambiguous tightly cropped arrays
+  while the compositor still owns placement.
 - Landmark schema compatibility is explicit. Do not infer topology from landmark count.
 - Selection owns pose/expression weights; rendering consumes them and does not implement a
   second selection policy.

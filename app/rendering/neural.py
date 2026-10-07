@@ -281,12 +281,36 @@ class NeuralFaceRenderer:
             raise StageError("Neural runtime returned stale frame identity")
         expected_rgb = (output_format.height, output_format.width, 3)
         expected_alpha = (output_format.height, output_format.width)
-        if rendered.rgb.shape != expected_rgb or rendered.rgb.dtype != np.uint8:
-            raise StageError("Neural runtime returned an invalid RGB frame")
-        if rendered.alpha.shape != expected_alpha or rendered.alpha.dtype != np.float32:
-            raise StageError("Neural runtime returned an invalid alpha mask")
-        if not np.isfinite(rendered.alpha).all() or np.any(
-            (rendered.alpha < 0.0) | (rendered.alpha > 1.0)
+        if rendered.rgb.dtype != np.uint8 or rendered.alpha.dtype != np.float32:
+            raise StageError("Neural runtime returned invalid image types")
+        region = rendered.active_region
+        alpha_to_validate = rendered.alpha
+        if region is None:
+            if rendered.rgb.shape != expected_rgb or rendered.alpha.shape != expected_alpha:
+                raise StageError("Neural runtime returned invalid full-frame dimensions")
+        else:
+            if (
+                len(region) != 4
+                or any(type(value) is not int for value in region)
+                or region[0] < 0
+                or region[1] < 0
+                or region[2] <= 0
+                or region[3] <= 0
+                or region[0] + region[2] > output_format.width
+                or region[1] + region[3] > output_format.height
+            ):
+                raise StageError("Neural runtime returned an invalid active region")
+            x, y, width, height = region
+            crop_rgb = (height, width, 3)
+            crop_alpha = (height, width)
+            if rendered.rgb.shape == crop_rgb and rendered.alpha.shape == crop_alpha:
+                alpha_to_validate = rendered.alpha
+            elif rendered.rgb.shape == expected_rgb and rendered.alpha.shape == expected_alpha:
+                alpha_to_validate = rendered.alpha[y : y + height, x : x + width]
+            else:
+                raise StageError("Neural runtime output does not match its active region")
+        if not np.isfinite(alpha_to_validate).all() or np.any(
+            (alpha_to_validate < 0.0) | (alpha_to_validate > 1.0)
         ):
             raise StageError("Neural runtime alpha must contain finite values in [0, 1]")
 
@@ -294,7 +318,7 @@ class NeuralFaceRenderer:
         alpha = np.array(rendered.alpha, dtype=np.float32, order="C", copy=True)
         rgb.setflags(write=False)
         alpha.setflags(write=False)
-        return RenderedFace(face.frame_id, face.timestamp_ns, rgb, alpha)
+        return RenderedFace(face.frame_id, face.timestamp_ns, rgb, alpha, region)
 
     def close(self) -> None:
         for entry in self._cache.values():

@@ -107,14 +107,15 @@ def test_renderer_interpolates_references_and_produces_a_feathered_face_mask():
         (ReferenceWeight("warm", 0.25), ReferenceWeight("green", 0.75)),
     )
 
-    assert rendered.rgb.shape == (120, 160, 3)
-    assert rendered.alpha.shape == (120, 160)
+    assert rendered.active_region is not None
+    x, y, width, height = rendered.active_region
+    assert rendered.rgb.shape == (height, width, 3)
+    assert rendered.alpha.shape == (height, width)
     assert rendered.rgb.dtype == np.uint8
     assert rendered.alpha.dtype == np.float32
-    assert rendered.alpha[59, 83] > 0.95
-    assert rendered.alpha[0, 0] == 0.0
+    assert rendered.alpha[59 - y, 83 - x] > 0.95
     assert not np.any((rendered.alpha > 0.0) & np.all(rendered.rgb == 0, axis=2))
-    assert rendered.rgb[59, 83] == pytest.approx((78, 172, 30), abs=2)
+    assert rendered.rgb[59 - y, 83 - x] == pytest.approx((78, 172, 30), abs=2)
     assert not rendered.rgb.flags.writeable
     assert not rendered.alpha.flags.writeable
 
@@ -137,6 +138,23 @@ def test_compositor_preserves_pixels_outside_alpha_and_frame_identity():
     assert output.rgb[6, 8].tolist() == [220, 40, 20]
     assert original.rgb[6, 8].tolist() == [10, 20, 180]
     assert not output.rgb.flags.writeable
+
+
+def test_compositor_accepts_a_tightly_cropped_active_region():
+    original_pixels = np.full((12, 16, 3), (10, 20, 180), dtype=np.uint8)
+    original_pixels.setflags(write=False)
+    rendered_pixels = np.full((6, 6, 3), (220, 40, 20), dtype=np.uint8)
+    rendered_pixels.setflags(write=False)
+    alpha = np.ones((6, 6), dtype=np.float32)
+    alpha.setflags(write=False)
+
+    output = AlphaFaceCompositor(color_match_strength=0.0).composite(
+        VideoFrame(4, 99, original_pixels),
+        RenderedFace(4, 99, rendered_pixels, alpha, (5, 3, 6, 6)),
+    )
+
+    assert output.rgb[0, 0].tolist() == [10, 20, 180]
+    assert output.rgb[6, 8].tolist() == [220, 40, 20]
 
 
 def test_expression_geometry_closes_eyes_opens_mouth_and_lifts_smile_corners():

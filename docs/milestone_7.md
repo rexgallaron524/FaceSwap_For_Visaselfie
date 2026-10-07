@@ -77,8 +77,9 @@ the PySide6 process while retaining local inference.
 
 The adapter prepares every library reference once on first use. It reuses the opaque
 appearance object while the `PreparedReference` is unchanged, releases removed/replaced
-entries, and clears device state on close. The runtime must return the same full-frame RGB
-and alpha contract as the geometric renderer, including matching frame identity.
+entries, and clears device state on close. The runtime must return the same facial RGB and
+alpha contract as the geometric renderer, including matching frame identity. Milestone 8
+permits either full-frame arrays or tightly cropped arrays with an explicit active region.
 
 The contract-only benchmark at 1280×720 measures cache and full-frame validation/copy cost;
 it intentionally excludes model inference. Run it with:
@@ -153,8 +154,8 @@ and [paper](https://arxiv.org/abs/2407.03168). The source API was inspected at c
 ## Stable decisions for later milestones
 
 - Keep `FaceRenderer` as the only pipeline-facing render boundary.
-- Keep full-frame RGB plus facial alpha output so the existing compositor owns body and
-  background preservation.
+- Keep facial RGB plus alpha output, with an explicit active region for cropped output, so
+  the existing compositor owns body and background preservation.
 - Cache reference appearance independently from per-frame motion.
 - Keep the geometric renderer available for fallback, comparison, and diagnostics.
 - Keep model packages and weights optional and local; do not import them from UI or future

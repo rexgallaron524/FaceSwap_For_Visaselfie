@@ -21,48 +21,72 @@ class AlphaFaceCompositor:
             raise StageError("Original and rendered face identities do not match")
         if original.rgb.ndim != 3 or original.rgb.shape[2] != 3:
             raise StageError("Original frame must be an H x W x 3 RGB image")
-        if face.rgb.shape != original.rgb.shape or face.alpha.shape != original.rgb.shape[:2]:
-            raise StageError("Rendered face dimensions do not match the original frame")
         if original.rgb.dtype != np.uint8 or face.rgb.dtype != np.uint8:
             raise StageError("Original and rendered RGB images must use uint8 pixels")
-        if face.alpha.dtype != np.float32 or not np.isfinite(face.alpha).all():
-            raise StageError("Rendered alpha mask must contain finite float32 values")
-        if np.any(face.alpha < 0.0) or np.any(face.alpha > 1.0):
-            raise StageError("Rendered alpha mask values must be in [0, 1]")
-
+        if face.rgb.ndim != 3 or face.rgb.shape[2] != 3 or face.alpha.ndim != 2:
+            raise StageError("Rendered face arrays have invalid dimensions")
         alpha = face.alpha
-        active_y, active_x = np.nonzero(alpha > 1e-5)
-        if len(active_x) == 0:
+        if face.alpha.dtype != np.float32:
+            raise StageError("Rendered alpha mask must contain float32 values")
+        if face.active_region is None:
+            if face.rgb.shape != original.rgb.shape or alpha.shape != original.rgb.shape[:2]:
+                raise StageError("Rendered face dimensions do not match the original frame")
+            if not np.isfinite(alpha).all() or np.any((alpha < 0.0) | (alpha > 1.0)):
+                raise StageError("Rendered alpha mask values must be finite and in [0, 1]")
+            active_y, active_x = np.nonzero(alpha > 1e-5)
+            if len(active_x) == 0:
+                output = np.ascontiguousarray(original.rgb.copy())
+                output.setflags(write=False)
+                return VideoFrame(original.frame_id, original.timestamp_ns, output)
+            x0, x1 = int(active_x.min()), int(active_x.max()) + 1
+            y0, y1 = int(active_y.min()), int(active_y.max()) + 1
+        else:
+            region = face.active_region
+            if (
+                len(region) != 4
+                or any(type(value) is not int for value in region)
+                or region[0] < 0
+                or region[1] < 0
+                or region[2] <= 0
+                or region[3] <= 0
+            ):
+                raise StageError("Rendered face active region is invalid")
+            x0, y0, region_width, region_height = region
+            x1, y1 = x0 + region_width, y0 + region_height
+            if x1 > original.rgb.shape[1] or y1 > original.rgb.shape[0]:
+                raise StageError("Rendered face active region exceeds the output frame")
+        region_shape = (y1 - y0, x1 - x0)
+        if face.rgb.shape[:2] == region_shape and alpha.shape == region_shape:
+            source = face.rgb
+            local_alpha = alpha
+        elif face.rgb.shape == original.rgb.shape and alpha.shape == original.rgb.shape[:2]:
+            source = face.rgb[y0:y1, x0:x1]
+            local_alpha = alpha[y0:y1, x0:x1]
+        else:
+            raise StageError("Rendered face dimensions do not match its active region")
+        if not np.isfinite(local_alpha).all() or np.any((local_alpha < 0.0) | (local_alpha > 1.0)):
+            raise StageError("Rendered alpha mask values must be finite and in [0, 1]")
+        if not np.any(local_alpha > 1e-5):
             output = np.ascontiguousarray(original.rgb.copy())
             output.setflags(write=False)
             return VideoFrame(original.frame_id, original.timestamp_ns, output)
-
-        x0, x1 = int(active_x.min()), int(active_x.max()) + 1
-        y0, y1 = int(active_y.min()), int(active_y.max()) + 1
-        local_alpha = alpha[y0:y1, x0:x1]
-        source = face.rgb[y0:y1, x0:x1].astype(np.float32)
-        target = original.rgb[y0:y1, x0:x1].astype(np.float32)
-        statistics_mask = np.where(local_alpha >= 0.2, 255, 0).astype(np.uint8)
+        target = original.rgb[y0:y1, x0:x1]
+        statistics_mask = cv2.compare(local_alpha, 0.2, cv2.CMP_GE)
         if cv2.countNonZero(statistics_mask) > 1 and self._strength > 0.0:
-            source_mean, source_stddev = cv2.meanStdDev(
-                face.rgb[y0:y1, x0:x1], mask=statistics_mask
-            )
-            target_mean, target_stddev = cv2.meanStdDev(
-                original.rgb[y0:y1, x0:x1], mask=statistics_mask
-            )
+            source_mean, source_stddev = cv2.meanStdDev(source, mask=statistics_mask)
+            target_mean, target_stddev = cv2.meanStdDev(target, mask=statistics_mask)
             source_mean = source_mean.reshape(3).astype(np.float32)
             target_mean = target_mean.reshape(3).astype(np.float32)
             scale = (target_stddev.reshape(3) + 1.0) / (source_stddev.reshape(3) + 1.0)
             scale = np.clip(scale, 0.65, 1.5)
-            matched = (source - source_mean) * scale + target_mean
-            source = source * (1.0 - self._strength) + matched * self._strength
+            gain = 1.0 - self._strength + scale * self._strength
+            bias = (target_mean - source_mean * scale) * self._strength
+            transform = np.zeros((3, 4), dtype=np.float32)
+            transform[0, 0], transform[1, 1], transform[2, 2] = gain
+            transform[:, 3] = bias
+            source = cv2.transform(source, transform)
 
-        # Suppress single-pixel mesh seams without spreading beyond the supplied alpha.
-        source = cv2.GaussianBlur(source, (3, 3), 0.0)
-        opacity = local_alpha[..., None]
-        composite = np.clip(np.rint(source * opacity + target * (1.0 - opacity)), 0, 255).astype(
-            np.uint8
-        )
+        composite = cv2.blendLinear(source, target, local_alpha, 1.0 - local_alpha)
         output = np.ascontiguousarray(original.rgb.copy())
         output[y0:y1, x0:x1] = composite
         output.setflags(write=False)

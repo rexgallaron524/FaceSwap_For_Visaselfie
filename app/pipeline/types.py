@@ -207,8 +207,11 @@ class ReferenceWeight:
 class RenderedFace:
     frame_id: int
     timestamp_ns: int
-    rgb: RGBImage  # Full output frame size; content outside alpha is irrelevant.
-    alpha: AlphaMask  # H×W, finite [0, 1], zero outside the facial region.
+    # With active_region these may be tightly cropped to its width/height. Without it,
+    # both arrays use the full output-frame dimensions.
+    rgb: RGBImage
+    alpha: AlphaMask
+    active_region: tuple[int, int, int, int] | None = None  # x/y/width/height ROI.
 
 
 class StageError(RuntimeError):

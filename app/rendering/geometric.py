@@ -133,7 +133,44 @@ _FEATURE_CONTOURS = (
     88,
     95,
 )
-_MESH_INDICES = tuple(sorted(set(range(0, 468, 6)) | set(_FACE_OVAL) | set(_FEATURE_CONTOURS)))
+# A coarse deformation mesh keeps the semantic contours that materially move during pose,
+# blink, and mouth animation. The previous every-sixth-landmark fill produced roughly 300
+# tiny triangles and spent most frame time rebuilding equivalent affine maps.
+_MESH_SUPPORT = (
+    205,
+    425,
+)
+_MESH_FEATURES = (
+    # Eyes and brows.
+    33,
+    159,
+    133,
+    145,
+    362,
+    386,
+    263,
+    374,
+    70,
+    107,
+    336,
+    300,
+    # Nose bridge and nostrils.
+    1,
+    4,
+    168,
+    327,
+    # Outer and inner lips.
+    61,
+    0,
+    17,
+    291,
+    308,
+    14,
+    87,
+    78,
+    13,
+)
+_MESH_INDICES = tuple(sorted(set(_FACE_OVAL[::4]) | set(_MESH_FEATURES) | set(_MESH_SUPPORT)))
 _WEIGHT_EPSILON = 1e-8
 _EYE_GROUPS = (
     ((33, 133), (7, 144, 145, 153, 154, 155, 157, 158, 159, 160, 161, 163, 173, 246)),
@@ -305,19 +342,136 @@ def delaunay_triangle_indices(
     return tuple(sorted(triangles))
 
 
+def _smooth_landmark_map(
+    source_points: np.ndarray,
+    destination_points: np.ndarray,
+    width: int,
+    height: int,
+    origin: np.ndarray,
+) -> tuple[np.ndarray, np.ndarray]:
+    """Build a smooth destination-to-source map from sparse landmark displacement."""
+    control_indices = np.asarray(_MESH_INDICES)
+    source = np.asarray(source_points[control_indices], dtype=np.float32)
+    destination = np.asarray(destination_points[control_indices], dtype=np.float32) - origin
+    if source.shape != destination.shape or len(source) < 3:
+        raise StageError("Geometric landmark map requires matching control points")
+
+    destination_augmented = np.column_stack(
+        (destination, np.ones(len(destination), dtype=np.float32))
+    )
+    affine, *_ = np.linalg.lstsq(destination_augmented, source, rcond=None)
+    residual = source - destination_augmented @ affine
+
+    longest = max(width, height)
+    coarse_width = max(2, min(width, round(width / longest * 32)))
+    coarse_height = max(2, min(height, round(height / longest * 32)))
+    grid_x, grid_y = np.meshgrid(
+        np.linspace(0.0, width - 1.0, coarse_width, dtype=np.float32),
+        np.linspace(0.0, height - 1.0, coarse_height, dtype=np.float32),
+    )
+    query = np.column_stack((grid_x.ravel(), grid_y.ravel()))
+    delta = query[:, None, :] - destination[None, :, :]
+    distance_squared = np.sum(delta * delta, axis=2)
+    weights = 1.0 / np.maximum(distance_squared, 4.0)
+    weights *= weights
+    local_residual = weights @ residual / np.sum(weights, axis=1, keepdims=True)
+    query_augmented = np.column_stack((query, np.ones(len(query), dtype=np.float32)))
+    mapped = query_augmented @ affine + local_residual
+    coarse_x = mapped[:, 0].reshape(coarse_height, coarse_width).astype(np.float32)
+    coarse_y = mapped[:, 1].reshape(coarse_height, coarse_width).astype(np.float32)
+    map_x = cv2.resize(coarse_x, (width, height), interpolation=cv2.INTER_CUBIC)
+    map_y = cv2.resize(coarse_y, (width, height), interpolation=cv2.INTER_CUBIC)
+    return map_x, map_y
+
+
 class GeometricFaceRenderer:
     """Warp continuously selected references onto a tracked facial landmark mesh."""
 
-    def __init__(self, *, feather_fraction: float = 0.055) -> None:
+    def __init__(self, *, feather_fraction: float = 0.055, working_resolution: int = 192) -> None:
         if not isfinite(feather_fraction) or not 0.0 < feather_fraction <= 0.25:
             raise ValueError("Feather fraction must be in (0, 0.25]")
+        if type(working_resolution) is not int or working_resolution < 128:
+            raise ValueError("Working resolution must be an integer of at least 128 pixels")
         self._feather_fraction = feather_fraction
+        self._working_resolution = working_resolution
         self._format: FrameFormat | None = None
-        self._triangles: tuple[tuple[int, int, int], ...] | None = None
+        self._reference_signature: tuple[tuple[object, ...], ...] = ()
+        self._canonical_points: np.ndarray | None = None
+        self._canonical_images: dict[str, np.ndarray] = {}
 
     def open(self, output_format: FrameFormat) -> None:
         self._format = output_format
-        self._triangles = None
+        self._reference_signature = ()
+        self._canonical_points = None
+        self._canonical_images.clear()
+
+    @staticmethod
+    def _signature(references: tuple[PreparedReference, ...]) -> tuple[tuple[object, ...], ...]:
+        return tuple(
+            (
+                reference.reference_id,
+                id(reference.rgb),
+                id(reference.landmarks),
+                reference.rgb.shape,
+                reference.landmark_schema,
+            )
+            for reference in references
+        )
+
+    def _prepare_reference_cache(
+        self,
+        references: tuple[PreparedReference, ...],
+        source_points: dict[str, np.ndarray],
+    ) -> None:
+        signature = self._signature(references)
+        if signature == self._reference_signature:
+            return
+        canonical = references[0]
+        source_height, source_width = canonical.rgb.shape[:2]
+        scale = min(1.0, self._working_resolution / max(source_width, source_height))
+        canonical_width = max(1, round(source_width * scale))
+        canonical_height = max(1, round(source_height * scale))
+        scale_xy = np.array(
+            (canonical_width / source_width, canonical_height / source_height), dtype=np.float32
+        )
+        working_points = {
+            reference.reference_id: points * scale_xy
+            for reference, points in (
+                (reference, source_points[reference.reference_id]) for reference in references
+            )
+        }
+        canonical_points = working_points[canonical.reference_id]
+        zero_origin = np.zeros(2, dtype=np.float32)
+        images: dict[str, np.ndarray] = {}
+        for reference in references:
+            if reference.rgb.shape[:2] != (source_height, source_width):
+                raise StageError("Geometric references must share one normalized image size")
+            resized = cv2.resize(
+                reference.rgb,
+                (canonical_width, canonical_height),
+                interpolation=cv2.INTER_AREA,
+            )
+            if reference.reference_id == canonical.reference_id:
+                aligned = resized
+            else:
+                map_x, map_y = _smooth_landmark_map(
+                    working_points[reference.reference_id],
+                    canonical_points,
+                    canonical_width,
+                    canonical_height,
+                    zero_origin,
+                )
+                aligned = cv2.remap(
+                    resized,
+                    map_x,
+                    map_y,
+                    interpolation=cv2.INTER_LINEAR,
+                    borderMode=cv2.BORDER_REFLECT_101,
+                )
+            images[reference.reference_id] = aligned.astype(np.float32)
+        self._reference_signature = signature
+        self._canonical_points = canonical_points
+        self._canonical_images = images
 
     def render(
         self,
@@ -359,79 +513,18 @@ class GeometricFaceRenderer:
             reference.reference_id: np.asarray(
                 [(point.x, point.y) for point in reference.landmarks], dtype=np.float32
             )
-            for reference, _ in selected
+            for reference in references
         }
         target_all = expression_adjusted_landmarks(
             face, np.asarray([(point.x, point.y) for point in face.landmarks], np.float32)
         )
-        triangles = self._triangles
-        if triangles is None:
-            topology_reference = selected[0][0]
-            reference_height, reference_width = topology_reference.rgb.shape[:2]
-            mesh_source = source_points[topology_reference.reference_id][np.asarray(_MESH_INDICES)]
-            local_triangles = delaunay_triangle_indices(
-                mesh_source, reference_width, reference_height
-            )
-            triangles = tuple(
-                tuple(_MESH_INDICES[local_index] for local_index in triangle)
-                for triangle in local_triangles
-            )
-            if not triangles:
-                raise StageError("Reference face does not contain a renderable landmark region")
-            self._triangles = triangles
-        canvas = np.zeros((height, width, 3), dtype=np.float32)
-        coverage = np.zeros((height, width), dtype=np.uint8)
-        for triangle in triangles:
-            destination = target_all[np.asarray(triangle)].astype(np.float32)
-            if abs(float(cv2.contourArea(destination))) < 0.5:
-                continue
-            x, y, triangle_width, triangle_height = cv2.boundingRect(destination)
-            x0, y0 = max(0, x), max(0, y)
-            x1, y1 = min(width, x + triangle_width), min(height, y + triangle_height)
-            if x1 <= x0 or y1 <= y0:
-                continue
-            local_destination = destination - np.array((x0, y0), dtype=np.float32)
-            triangle_mask = np.zeros((y1 - y0, x1 - x0), dtype=np.uint8)
-            cv2.fillConvexPoly(
-                triangle_mask,
-                np.rint(local_destination).astype(np.int32),
-                255,
-                lineType=cv2.LINE_AA,
-            )
-            blended = np.zeros((y1 - y0, x1 - x0, 3), dtype=np.float32)
-            available_weight = 0.0
-            for reference, weight in selected:
-                source = source_points[reference.reference_id][np.asarray(triangle)]
-                if abs(float(cv2.contourArea(source))) < 0.25:
-                    continue
-                transform = cv2.getAffineTransform(source, local_destination)
-                warped = cv2.warpAffine(
-                    reference.rgb,
-                    transform,
-                    (x1 - x0, y1 - y0),
-                    flags=cv2.INTER_LINEAR,
-                    borderMode=cv2.BORDER_REFLECT_101,
-                )
-                blended += warped.astype(np.float32) * weight
-                available_weight += weight
-            if available_weight <= _WEIGHT_EPSILON:
-                continue
-            blended /= available_weight
-            mask = triangle_mask.astype(np.float32)[..., None] / 255.0
-            region = canvas[y0:y1, x0:x1]
-            region *= 1.0 - mask
-            region += blended * mask
-            coverage_region = coverage[y0:y1, x0:x1]
-            np.maximum(coverage_region, triangle_mask, out=coverage_region)
-
-        jaw_open = min(1.0, max(0.0, float(face.blendshapes.get("jaw_open", 0.0))))
-        if jaw_open > 0.08:
-            mouth = np.rint(target_all[np.asarray(_INNER_LIP)]).astype(np.int32)
-            mouth_mask = np.zeros((height, width), dtype=np.uint8)
-            cv2.fillConvexPoly(mouth_mask, cv2.convexHull(mouth), 255, lineType=cv2.LINE_AA)
-            mouth_opacity = mouth_mask.astype(np.float32)[..., None] / 255.0 * (0.58 * jaw_open)
-            cavity_color = np.array((38.0, 12.0, 18.0), dtype=np.float32)
-            canvas = canvas * (1.0 - mouth_opacity) + cavity_color * mouth_opacity
+        self._prepare_reference_cache(references, source_points)
+        canonical_points = self._canonical_points
+        if canonical_points is None:
+            raise StageError("Reference appearance cache is unavailable")
+        blended_reference = np.zeros_like(next(iter(self._canonical_images.values())))
+        for reference, weight in selected:
+            blended_reference += self._canonical_images[reference.reference_id] * weight
 
         oval = target_all[np.asarray(_FACE_OVAL)]
         visible_oval = oval[
@@ -440,28 +533,71 @@ class GeometricFaceRenderer:
         if len(visible_oval) < 3:
             raise StageError("Tracked facial region lies outside the output frame")
         hull = cv2.convexHull(visible_oval.astype(np.float32)).reshape(-1, 2)
-        face_size = max(1.0, min(face.bounds.width, face.bounds.height))
-        feather_width = max(1.0, face_size * self._feather_fraction)
         x0 = max(0, int(np.floor(np.min(hull[:, 0]))))
         y0 = max(0, int(np.floor(np.min(hull[:, 1]))))
         x1 = min(width, int(np.ceil(np.max(hull[:, 0]))) + 1)
         y1 = min(height, int(np.ceil(np.max(hull[:, 1]))) + 1)
-        hard_mask = np.zeros((y1 - y0, x1 - x0), dtype=np.uint8)
-        local_hull = np.rint(hull - np.array((x0, y0), np.float32)).astype(np.int32)
+        roi_width, roi_height = x1 - x0, y1 - y0
+        if roi_width <= 0 or roi_height <= 0:
+            raise StageError("Tracked facial region lies outside the output frame")
+
+        roi_origin = np.array((x0, y0), dtype=np.float32)
+        render_scale = min(1.0, self._working_resolution / max(roi_width, roi_height))
+        render_width = max(1, round(roi_width * render_scale))
+        render_height = max(1, round(roi_height * render_scale))
+        render_points = (target_all - roi_origin) * render_scale
+        map_x, map_y = _smooth_landmark_map(
+            canonical_points,
+            render_points,
+            render_width,
+            render_height,
+            np.zeros(2, dtype=np.float32),
+        )
+        canvas = cv2.remap(
+            blended_reference,
+            map_x,
+            map_y,
+            interpolation=cv2.INTER_LINEAR,
+            borderMode=cv2.BORDER_REFLECT_101,
+        )
+
+        jaw_open = min(1.0, max(0.0, float(face.blendshapes.get("jaw_open", 0.0))))
+        if jaw_open > 0.08:
+            mouth = np.rint(render_points[np.asarray(_INNER_LIP)]).astype(np.int32)
+            mouth_mask = np.zeros((render_height, render_width), dtype=np.uint8)
+            cv2.fillConvexPoly(mouth_mask, cv2.convexHull(mouth), 255, lineType=cv2.LINE_AA)
+            mouth_opacity = mouth_mask.astype(np.float32)[..., None] / 255.0 * (0.58 * jaw_open)
+            cavity_color = np.array((38.0, 12.0, 18.0), dtype=np.float32)
+            canvas = canvas * (1.0 - mouth_opacity) + cavity_color * mouth_opacity
+
+        face_size = max(1.0, min(face.bounds.width, face.bounds.height))
+        feather_width = max(1.0, face_size * self._feather_fraction * render_scale)
+        hard_mask = np.zeros((render_height, render_width), dtype=np.uint8)
+        local_hull = np.rint((hull - roi_origin) * render_scale).astype(np.int32)
         cv2.fillConvexPoly(hard_mask, local_hull, 255, lineType=cv2.LINE_8)
         distance = cv2.distanceTransform(hard_mask, cv2.DIST_L2, cv2.DIST_MASK_PRECISE)
         local_alpha = np.clip(distance / feather_width, 0.0, 1.0).astype(np.float32)
-        local_alpha *= (coverage[y0:y1, x0:x1] > 0).astype(np.float32)
-        alpha = np.zeros((height, width), dtype=np.float32)
-        alpha[y0:y1, x0:x1] = local_alpha
+        local_rendered = np.clip(np.rint(canvas), 0, 255).astype(np.uint8)
+        if (render_width, render_height) != (roi_width, roi_height):
+            local_rendered = cv2.resize(
+                local_rendered, (roi_width, roi_height), interpolation=cv2.INTER_LINEAR
+            )
+            local_alpha = cv2.resize(
+                local_alpha, (roi_width, roi_height), interpolation=cv2.INTER_LINEAR
+            ).astype(np.float32, copy=False)
 
-        rendered = np.clip(np.rint(canvas), 0, 255).astype(np.uint8)
-        rendered = np.ascontiguousarray(rendered)
-        alpha = np.ascontiguousarray(alpha)
-        rendered.setflags(write=False)
-        alpha.setflags(write=False)
-        return RenderedFace(face.frame_id, face.timestamp_ns, rendered, alpha)
+        local_rendered.setflags(write=False)
+        local_alpha.setflags(write=False)
+        return RenderedFace(
+            face.frame_id,
+            face.timestamp_ns,
+            local_rendered,
+            local_alpha,
+            (x0, y0, roi_width, roi_height),
+        )
 
     def close(self) -> None:
         self._format = None
-        self._triangles = None
+        self._reference_signature = ()
+        self._canonical_points = None
+        self._canonical_images.clear()

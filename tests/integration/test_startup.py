@@ -115,7 +115,7 @@ metric_labels = [
     label for label in window.diagnostics_card.findChildren(QLabel)
     if label.objectName() == 'metricLabel'
 ]
-assert len(metric_labels) == 18
+assert len(metric_labels) == 19
 assert all(label.height() >= label.fontMetrics().height() for label in metric_labels)
 assert all(
     bar.minimumHeight() >= bar.fontMetrics().height()

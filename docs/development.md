@@ -75,7 +75,9 @@ Only explicit configuration is loaded; no hidden environment-variable overrides 
 except standard `LOCALAPPDATA` for the log location and Qt's own environment settings.
 Relative log and renderer model paths resolve against the TOML file's parent. Video
 dimensions/FPS are camera requests; the app shows the actual negotiated frame size and
-device-reported FPS. `renderer.backend = "geometric"` is the default. Selecting
+device-reported FPS. The profiled defaults use `performance.tracking_fps = 10` and
+`performance.opencv_threads = 4`; re-run the Milestone 8 benchmark before changing them for
+another target machine. `renderer.backend = "geometric"` is the default. Selecting
 `"liveportrait"` requires an explicitly installed local `renderer.runtime_module`; the app
 never downloads a provider or weights.
 
@@ -97,8 +99,9 @@ Choose the preview mode below **Mirror local preview**:
 
 The diagnostics panel reports tracking, rendering, compositing, and complete-frame time.
 It also reports smoothing time and the current translation/pose correction. Disable
-**Temporal smoothing** to compare raw and stabilized behavior. Processed output is currently
-a maintainable CPU prototype and may run below camera FPS.
+**Temporal smoothing** to compare raw and stabilized behavior. On the profiled development
+machine, processed output sustains 28.6–29.0 FPS at 1280×720; see
+[Milestone 8](milestone_8.md) for the command and limits.
 
 Logs go to `%LOCALAPPDATA%\FaceLive\logs\facelive.log` by default, with three backups
 and a 2,000,000-byte rotation threshold. Without `LOCALAPPDATA`, the path is
@@ -126,8 +129,8 @@ bounded asynchronous tracking, diagnostic values, geometric triangle warping, co
 reference interpolation, feathered masks, compositing invariants, and both UI shells. Tests
 also cover temporal geometry, expression and weight transitions, bounded tracking holds,
 the controlled MP4 contract, neural adapter output validation, reference feature caching,
-and renderer selection. No webcam, GPU, model weights, or recorded real-person face data is
-needed.
+renderer selection, tightly cropped renderer output, and performance configuration. No
+webcam, GPU, model weights, or recorded real-person face data is needed.
 
 Run the optional physical-camera benchmark after closing other camera applications:
 
@@ -138,6 +141,16 @@ Run the optional physical-camera benchmark after closing other camera applicatio
 Use `--device 1` for another enumerated physical camera. The tool reports negotiated
 format, measured capture FPS, polling throughput, and skipped frames. Camera setup may
 take a moment, but the app performs it away from the Qt GUI thread.
+
+Profile the complete deterministic preview without a webcam:
+
+```powershell
+.\.venv\Scripts\python.exe tools\benchmarks\realtime_preview.py `
+  --frames 180 --warmup-frames 30
+```
+
+The tool measures every preview stage, bounded drop counts, and shutdown. Use the sequential
+`preview_pipeline.py` tool when locating a stage bottleneck before changing scheduling.
 
 Use `python -m ruff format .` to format code. The lint rules cover errors, imports,
 modern Python syntax, and common bug patterns. Test discovery is limited to `tests/`.
@@ -158,8 +171,8 @@ backpressure policy. `app/tracking/geometry.py` contains backend-independent coo
 pose, blendshape-name, and confidence helpers. Keep MediaPipe objects inside the adapter.
 `app/reference/selector.py` owns the deterministic pose/expression interpolation. The live
 developer visualization is `app/ui/reference_weights.py`. `app/rendering/geometric.py`
-owns deterministic landmark warping and mask generation; `app/compositing/alpha.py` owns
-local color matching and immutable alpha composition.
+owns cached smooth landmark warping and cropped mask generation;
+`app/compositing/alpha.py` owns local color matching and immutable region composition.
 `app/stabilization/temporal.py` owns time-based smoothing and short-gap recovery. The
 repeatable fixture generator is `tools/test_clips/generate_controlled_motion.py`, and
 `tools/benchmarks/temporal_pipeline.py` compares the complete local pipeline with smoothing
@@ -176,4 +189,4 @@ Inspect code before each milestone, state a plan, implement only that milestone,
 add applicable tests, run checks, update docs, and stop for the next instruction.
 The runtime must keep processing local. Neural providers and weight files require explicit
 dependency, performance, and license review before packaging. No installer is produced in
-Milestones 2–7.
+Milestones 2–8.

@@ -2,14 +2,15 @@
 
 ## Status and scope
 
-Milestones 2 through 7 implement the desktop shell, physical-camera preview, asynchronous
+Milestones 2 through 8 implement the desktop shell, physical-camera preview, asynchronous
 single-face tracking, diagnostics, local reference enrollment, continuous pose-space
 selection, and deterministic geometric face replacement. Tracking produces the
 backend-independent `FaceState`; selected references are warped to its landmark mesh and
 composited through a feathered facial mask. Temporal stabilization now covers geometry,
 expressions, and selection weights. Milestone 7 adds an optional neural-renderer adapter,
-runtime boundary, and configuration selection while retaining geometry as the default;
-virtual output remains planned. Target
+runtime boundary, and configuration selection while retaining geometry as the default.
+Milestone 8 adds measured bounded scheduling and a 1280×720 preview profile; virtual
+output remains planned. Target
 platform: Windows 11 x64, initial input/output 1280×720 at 30 FPS.
 
 Python 3.12 is the tested minor version. PySide6 supplies the desktop UI, NumPy supplies
@@ -83,10 +84,11 @@ errors must be logged and handled at the orchestration boundary as processing fa
   changes the canonical `VideoFrame`. Tracking, rendering, compositing, and the future
   virtual-camera sink consume unmirrored frames. Meeting applications may mirror their
   own local self-view, while remote participants receive the unmirrored output.
-- Alpha masks are full-frame `float32` arrays `(height, width)`, finite in `[0, 1]`.
-  The renderer outputs full-frame RGB plus alpha to avoid ambiguous crop transforms.
-  Implementations may calculate mask, color, and blend operations within a clipped face
-  region, but the published contract remains full-frame and zero outside that region.
+- Alpha masks are `float32`, finite in `[0, 1]`. A `RenderedFace` without an
+  `active_region` uses full-frame RGB and alpha arrays. With an explicit
+  `(x, y, width, height)` region, both arrays may be tightly cropped to that region.
+  The compositor validates the crop and owns placement, so renderers avoid allocating
+  unused full-frame face and mask buffers without making crop geometry implicit.
 - Frozen dataclasses prevent field rebinding; they do **not** freeze NumPy arrays or
   mappings. Producers must publish read-only snapshots (or enforce exclusive ownership),
   keep their buffers alive while referenced, and never overwrite published storage.
@@ -179,10 +181,10 @@ errors must be logged and handled at the orchestration boundary as processing fa
   reference. Incomplete libraries interpolate across the remaining axis anchors and always
   renormalize the result.
 - The geometric renderer accepts only matching `mediapipe-face-landmarker-478-v1` live and
-  reference meshes. A cached Delaunay topology joins the face oval and interior eye, brow,
-  nose, lip, and support landmarks. Each selected reference is affinely warped per triangle
-  and combined by its normalized selection weight. Live landmarks carry translation, scale,
-  yaw/pitch deformation, and roll into the output without rectangular image placement.
+  reference meshes. It aligns and caches each reference at a bounded working resolution,
+  blends selected appearances there, and builds one smooth destination-to-source map from
+  sparse face-oval, eye, brow, nose, lip, and support controls. One OpenCV remap carries live
+  translation, scale, yaw/pitch deformation, and roll into a tightly cropped facial output.
 - The facial alpha region is the live face-oval convex hull with scale-relative inward
   feathering. The compositor performs bounded per-channel mean/contrast correction within
   that region, then alpha blends into a new frame. Pixels where alpha is zero remain exactly
@@ -222,11 +224,15 @@ errors must be logged and handled at the orchestration boundary as processing fa
   mode, the selected cached appearance and landmarks feed the configured renderer and
   compositing.
   Original and diagnostic modes skip those two stages.
-- Rendering and compositing currently execute synchronously after a matched
-  tracking result. No processed-frame queue exists: a new camera frame is submitted only
-  through the tracker's existing one-frame backpressure path. Stage timings use
-  `perf_counter_ns`; complete-frame time starts when that retained frame is submitted for
-  tracking and ends after composition.
+- Tracking is intentionally sampled at the configured `performance.tracking_fps` while
+  capture and processed presentation remain at the negotiated camera cadence. The newest
+  completed stabilized `FaceState` is retimestamped onto each current camera frame; the
+  body and background therefore stay current between tracking updates.
+- Rendering and compositing run on a single worker away from Qt. Scheduling retains at
+  most one active request and one replaceable newest pending request. Replacing that pending
+  request increments the processing-drop counter; no older work can accumulate. Qt converts
+  and publishes one completed image at a time, then immediately starts the retained request.
+  Stage timings use `perf_counter_ns`; complete-frame time ends after UI presentation.
 - The UI can bypass stabilization explicitly for comparison. Toggling it or changing the
   camera/reference library resets face and weight history. Diagnostics report stabilization
   cost plus the current translation and maximum pose correction.
@@ -251,9 +257,10 @@ errors must be logged and handled at the orchestration boundary as processing fa
 - A provider factory receives only model directory and device preference. It may use an
   isolated local worker so LivePortrait's Python/CUDA dependencies do not enter the PySide6
   environment. Network inference is outside the architecture.
-- Runtime output must preserve `FaceState` frame ID/timestamp and publish full-frame RGB
-  plus finite facial alpha. It may not composite body or background. This keeps output
-  behavior identical across geometric and neural implementations.
+- Runtime output must preserve `FaceState` frame ID/timestamp and publish finite facial RGB
+  plus alpha, either full-frame or paired with an explicit active region. It may not
+  composite body or background. This keeps output behavior identical across geometric and
+  neural implementations.
 - Adapter metrics separate reference preparation from per-frame inference. UI rendering,
   compositing, and complete-frame timing remain independent pipeline measurements.
 
@@ -335,6 +342,14 @@ contract overhead. No local neural inference result is claimed because the evalu
 has no NVIDIA runtime, PyTorch, provider, or weights. LivePortrait reports 12.8 ms for its
 model modules on an RTX 4090; that is a hardware-specific model measurement rather than an
 end-to-end FaceLive result. See `docs/milestone_7.md` for the quality and licensing decision.
+
+Milestone 8 profiles the complete bounded preview using the controlled clip expanded to
+1280×720. Three final 150-frame measured runs sustained 28.59, 28.98, and 29.38 processed
+FPS against a 30 FPS input. The last measured 11.61 ms mean rendering, 4.49 ms
+compositing, 7.25 ms UI presentation, and 40.34 ms capture-to-presentation latency; two
+stale processing frames were replaced. The configured 10 FPS tracking cadence and four
+OpenCV threads were selected from measured alternatives on the 8-logical-CPU development
+machine. See `docs/milestone_8.md` for baseline, commands, tail latency, and limitations.
 
 After the preview pipeline is stable, implement a C++ Media Foundation custom Media
 Source registered using `MFCreateVirtualCamera`, based on Microsoft's Windows Camera

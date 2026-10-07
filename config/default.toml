@@ -8,6 +8,11 @@ width = 1280
 height = 720
 fps = 30
 
+[performance]
+# Profiled defaults for an 8-logical-CPU Windows development machine.
+tracking_fps = 10
+opencv_threads = 4
+
 [renderer]
 backend = "geometric"
 # Optional local neural provider. It is imported only for backend = "liveportrait".

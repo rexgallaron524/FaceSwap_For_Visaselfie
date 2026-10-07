@@ -8,6 +8,7 @@ import sys
 from collections.abc import Callable, Sequence
 from pathlib import Path
 
+import cv2
 from PySide6.QtCore import QTimer
 from PySide6.QtWidgets import QApplication
 
@@ -35,6 +36,7 @@ def create_application(
     stabilizer: Stabilizer | None = None,
 ) -> tuple[QApplication, MainWindow]:
     """Create the shell without starting the event loop or opening any devices."""
+    cv2.setNumThreads(config.performance.opencv_threads)
     application = QApplication.instance()
     if application is None:
         application = QApplication(["facelive"])

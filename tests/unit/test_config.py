@@ -13,6 +13,7 @@ def test_defaults_follow_local_app_data(monkeypatch, tmp_path):
     assert config.logging.directory == tmp_path / "FaceLive" / "logs"
     assert config.renderer.backend == "geometric"
     assert config.renderer.model_directory == tmp_path / "FaceLive" / "models" / "liveportrait"
+    assert (config.performance.tracking_fps, config.performance.opencv_threads) == (10, 4)
     assert config.debug is False
 
 
@@ -54,6 +55,9 @@ def test_partial_config_resolves_relative_paths(tmp_path):
         "[renderer]\nmodel_directory = false",
         '[renderer]\ndevice = "directml"',
         "[renderer]\nunknown = true",
+        "[performance]\ntracking_fps = 0",
+        "[performance]\nopencv_threads = 0",
+        "[video]\nfps = 10\n[performance]\ntracking_fps = 11",
         "[invalid",
     ],
 )

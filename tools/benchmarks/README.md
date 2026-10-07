@@ -1,4 +1,4 @@
-# Pipeline benchmarks — reserved
+# Pipeline benchmarks
 
 Add reproducible benchmarks with the processing pipeline. Report hardware, resolution,
 duration, warmup, processed/output FPS, mean and tail latency, and frame drops per stage.
@@ -37,3 +37,24 @@ to benchmark a neural model:
 
 Actual model inference is reported by `NeuralFaceRenderer.metrics.inference_ms` when a local
 provider is installed.
+
+Milestone 8 adds a sequential profiler and a bounded real-time preview benchmark:
+
+```powershell
+.\.venv\Scripts\python.exe tools\benchmarks\preview_pipeline.py `
+  --max-frames 75 --warmup-frames 15
+
+.\.venv\Scripts\python.exe tools\benchmarks\realtime_preview.py `
+  --frames 180 --warmup-frames 30
+```
+
+`preview_pipeline.py` identifies expensive stages without scheduling overlap.
+`realtime_preview.py` uses the production one-frame tracker, one active plus one newest
+pending processing request, and offscreen Qt presentation. It reports mean and p95 capture,
+tracking, stabilization, selection, rendering, compositing, UI, and full-frame timings plus
+all drop counts and resource-shutdown time. Use `--save-frame output.png` to inspect one
+composite. `--tracking-fps`, `--opencv-threads`, and `--working-resolution` support explicit
+comparison runs; their defaults match the profiled application configuration.
+
+Recorded Milestone 8 hardware, commands, rejected experiments, and results are in
+[`docs/milestone_8.md`](../../docs/milestone_8.md).

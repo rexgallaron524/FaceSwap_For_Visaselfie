@@ -170,3 +170,28 @@ def test_neural_adapter_validates_alpha_values():
     renderer.open(FrameFormat(8, 6, 30))
     with pytest.raises(StageError, match="finite values"):
         renderer.render(face(), (reference("front", 20),), (ReferenceWeight("front", 1.0),))
+
+
+def test_neural_adapter_accepts_tightly_cropped_active_region():
+    class CroppedRuntime(FakeRuntime):
+        def render(self, tracked_face, appearances):
+            rgb = np.full((3, 4, 3), 80, dtype=np.uint8)
+            alpha = np.ones((3, 4), dtype=np.float32)
+            return RenderedFace(
+                tracked_face.frame_id,
+                tracked_face.timestamp_ns,
+                rgb,
+                alpha,
+                (2, 1, 4, 3),
+            )
+
+    renderer = NeuralFaceRenderer(CroppedRuntime())
+    renderer.open(FrameFormat(8, 6, 30))
+
+    rendered = renderer.render(face(), (reference("front", 20),), (ReferenceWeight("front", 1.0),))
+
+    assert rendered.rgb.shape == (3, 4, 3)
+    assert rendered.alpha.shape == (3, 4)
+    assert rendered.active_region == (2, 1, 4, 3)
+    assert not rendered.rgb.flags.writeable
+    assert not rendered.alpha.flags.writeable

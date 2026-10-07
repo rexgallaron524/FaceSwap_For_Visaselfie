@@ -6,6 +6,7 @@ import logging
 import time
 from collections.abc import Callable
 from concurrent.futures import Future, ThreadPoolExecutor
+from dataclasses import dataclass, replace
 from math import hypot
 
 from PySide6.QtCore import QEvent, QPointF, QRectF, Qt, QTimer
@@ -47,6 +48,7 @@ from app.pipeline.types import (
     CameraDevice,
     FaceState,
     FrameFormat,
+    PreparedReference,
     ReferenceWeight,
     StageError,
     TrackingResult,
@@ -67,6 +69,25 @@ from app.tracking import MediaPipeFaceTracker
 from app.tracking.protocol import FaceTracker
 from app.ui.reference_dialog import ReferenceEnrollmentDialog
 from app.ui.reference_weights import ReferenceWeightsWidget
+
+
+@dataclass(frozen=True, slots=True)
+class _ProcessedFrame:
+    generation: int
+    output: VideoFrame
+    rendering_ms: float
+    compositing_ms: float
+    captured_at_ns: int
+
+
+@dataclass(frozen=True, slots=True)
+class _ProcessingRequest:
+    generation: int
+    frame: VideoFrame
+    face: FaceState
+    references: tuple[PreparedReference, ...]
+    weights: tuple[ReferenceWeight, ...]
+    captured_at_ns: int
 
 
 class MainWindow(QMainWindow):
@@ -92,13 +113,18 @@ class MainWindow(QMainWindow):
         self._capturing = False
         self._opening = False
         self._last_image: QImage | None = None
+        self._last_image_frame_id = -1
         self._last_processed_image: QImage | None = None
         self._last_face_state: FaceState | None = None
         self._last_raw_face_state: FaceState | None = None
         self._last_reference_weights: tuple[ReferenceWeight, ...] = ()
         self._current_smoothing_ms = 0.0
-        self._pending_tracking_frame: tuple[VideoFrame, QImage, int] | None = None
+        self._pending_tracking_frame: tuple[VideoFrame, QImage] | None = None
+        self._tracking_interval_ns = 1_000_000_000 // config.performance.tracking_fps
+        self._tracking_tolerance_ns = 1_000_000_000 // (2 * config.video.fps)
+        self._next_tracking_ns = 0
         self._tracking_drops = 0
+        self._processing_drops = 0
         self._tracking_failed = False
         self._rendering_failed = False
         self._layout_mode: str | None = None
@@ -115,6 +141,12 @@ class MainWindow(QMainWindow):
             self._logger.warning(self._reference_session.last_error)
         self._camera_executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="camera-open")
         self._open_future: Future[tuple[FrameFormat, str | None, str | None]] | None = None
+        self._processing_executor = ThreadPoolExecutor(
+            max_workers=1, thread_name_prefix="face-processing"
+        )
+        self._processing_future: Future[_ProcessedFrame] | None = None
+        self._pending_processing_request: _ProcessingRequest | None = None
+        self._processing_generation = 0
 
         self.setWindowTitle("FaceLive")
         self.resize(1440, 900)
@@ -521,6 +553,8 @@ class MainWindow(QMainWindow):
         self.complete_frame_latency_label.setObjectName("metricValue")
         self.tracking_drops_label = QLabel("0")
         self.tracking_drops_label.setObjectName("metricValue")
+        self.processing_drops_label = QLabel("0")
+        self.processing_drops_label.setObjectName("metricValue")
         self.preview_drops_label = QLabel("0")
         self.preview_drops_label.setObjectName("metricValue")
         rows = (
@@ -541,7 +575,8 @@ class MainWindow(QMainWindow):
             ("Compositing latency", self.compositing_latency_label),
             ("Complete frame", self.complete_frame_latency_label),
             ("Preview skips", self.preview_drops_label),
-            ("Tracker drops", self.tracking_drops_label),
+            ("Tracking skips", self.tracking_drops_label),
+            ("Processing drops", self.processing_drops_label),
         )
         for row, (label_text, value_widget) in enumerate(rows):
             label = QLabel(label_text)
@@ -710,6 +745,8 @@ class MainWindow(QMainWindow):
         self._update_reference_summary()
 
     def _update_reference_summary(self) -> None:
+        self._processing_generation += 1
+        self._pending_processing_request = None
         self._stabilizer.reset()
         self._last_processed_image = None
         complete = self._reference_library.completed_required_count
@@ -740,11 +777,14 @@ class MainWindow(QMainWindow):
         self._metrics.reset()
         self._reset_tracking_diagnostics("Opening", "opening")
         self._tracking_drops = 0
+        self._next_tracking_ns = 0
+        self._processing_drops = 0
         self._tracking_failed = False
         self._rendering_failed = False
         self._pending_tracking_frame = None
         self._last_face_state = None
         self._last_raw_face_state = None
+        self._last_image_frame_id = -1
         self._last_processed_image = None
         self._last_reference_weights = ()
         self._stabilizer.reset()
@@ -848,6 +888,7 @@ class MainWindow(QMainWindow):
     def stop_capture(self, *, message: str = "Camera preview stopped.") -> None:
         self._preview_timer.stop()
         self._metrics_timer.stop()
+        self._drain_processing()
         self._source.close()
         try:
             self._tracker.close()
@@ -856,6 +897,7 @@ class MainWindow(QMainWindow):
         self._renderer.close()
         self._capturing = False
         self._last_image = None
+        self._last_image_frame_id = -1
         self._last_processed_image = None
         self._last_face_state = None
         self._last_raw_face_state = None
@@ -863,6 +905,7 @@ class MainWindow(QMainWindow):
         self._pending_tracking_frame = None
         self._tracking_failed = False
         self._rendering_failed = False
+        self._processing_drops = 0
         self._stabilizer.reset()
         self._metrics.reset()
         self.camera_selector.setEnabled(bool(self._devices))
@@ -872,6 +915,7 @@ class MainWindow(QMainWindow):
         self._set_capture_state("Idle", "idle")
         self.capture_fps_label.setText("—")
         self.preview_drops_label.setText("0")
+        self.processing_drops_label.setText("0")
         self._reset_tracking_diagnostics("Idle", "idle")
         self.preview_image.setPixmap(QPixmap())
         self.preview_image.setText("Preview is idle.")
@@ -881,7 +925,23 @@ class MainWindow(QMainWindow):
         )
         self.statusBar().showMessage(message)
 
+    def _drain_processing(self) -> None:
+        """Discard pending publication and wait before closing renderer resources."""
+        self._processing_generation += 1
+        self._pending_processing_request = None
+        future, self._processing_future = self._processing_future, None
+        if future is None:
+            return
+        future.cancel()
+        if future.cancelled():
+            return
+        try:
+            future.result()
+        except Exception as exc:
+            self._logger.warning("Face processing stopped with an error during cleanup: %s", exc)
+
     def _poll_camera(self) -> None:
+        self._poll_processing()
         self._poll_tracking()
         try:
             frame = self._source.read_latest()
@@ -898,14 +958,38 @@ class MainWindow(QMainWindow):
             self._metrics.observe(frame)
             self._submit_tracking(frame)
         self._poll_tracking()
+        self._poll_processing()
 
     def _submit_tracking(self, frame: VideoFrame) -> None:
         if self._tracking_failed:
             self._display_frame(frame)
             return
         image = self._frame_image(frame)
+        self._last_image = image
+        self._last_image_frame_id = frame.frame_id
+        accepted = False
+        eligible = (
+            self._next_tracking_ns == 0
+            or frame.timestamp_ns + self._tracking_tolerance_ns >= self._next_tracking_ns
+        )
         try:
-            accepted = self._tracker.submit(frame)
+            if eligible:
+                accepted = self._tracker.submit(frame)
+                if accepted:
+                    scheduled_next = (
+                        frame.timestamp_ns + self._tracking_interval_ns
+                        if self._next_tracking_ns == 0
+                        else self._next_tracking_ns + self._tracking_interval_ns
+                    )
+                    self._next_tracking_ns = max(
+                        scheduled_next,
+                        frame.timestamp_ns
+                        + self._tracking_interval_ns
+                        - self._tracking_tolerance_ns,
+                    )
+            else:
+                self._tracking_drops += 1
+                self.tracking_drops_label.setText(str(self._tracking_drops))
         except StageError as exc:
             self._tracking_failed = True
             self._stabilizer.reset()
@@ -918,10 +1002,23 @@ class MainWindow(QMainWindow):
             self._logger.error("Face tracking submission failed: %s", exc)
             return
         if accepted:
-            self._pending_tracking_frame = (frame, image, time.perf_counter_ns())
-        else:
+            self._pending_tracking_frame = (frame, image)
+        elif eligible:
             self._tracking_drops += 1
             self.tracking_drops_label.setText(str(self._tracking_drops))
+        if (
+            self._preview_mode() == "processed"
+            and self._last_face_state is not None
+            and self._last_reference_weights
+        ):
+            current_face = replace(
+                self._last_face_state,
+                frame_id=frame.frame_id,
+                timestamp_ns=frame.timestamp_ns,
+            )
+            self._process_frame(frame, current_face, frame.timestamp_ns)
+        elif self._preview_mode() != "processed":
+            self._render_last_image()
 
     def _poll_tracking(self) -> None:
         if self._tracking_failed:
@@ -948,9 +1045,10 @@ class MainWindow(QMainWindow):
                 result.timestamp_ns,
             )
             return
-        frame, image, processing_started_ns = retained
-        self._last_image = image
-        self._last_processed_image = None
+        frame, image = retained
+        if frame.frame_id >= self._last_image_frame_id:
+            self._last_image = image
+            self._last_image_frame_id = frame.frame_id
         raw_face = result.face
         face = raw_face
         held = False
@@ -975,7 +1073,8 @@ class MainWindow(QMainWindow):
         self._update_tracking_diagnostics(result, face, held=held)
         if face is not None:
             if self._preview_mode() == "processed":
-                self._process_frame(frame, face, processing_started_ns)
+                if self._last_processed_image is None and self._processing_future is None:
+                    self._process_frame(frame, face, frame.timestamp_ns)
             elif not self._rendering_failed:
                 self._set_rendering_state("Ready", "running")
                 self.rendering_latency_label.setText("—")
@@ -1001,13 +1100,12 @@ class MainWindow(QMainWindow):
 
     def _display_frame(self, frame: VideoFrame) -> None:
         self._last_image = self._frame_image(frame)
+        self._last_image_frame_id = frame.frame_id
         self._last_processed_image = None
         self._last_face_state = None
         self._render_last_image()
 
-    def _process_frame(
-        self, frame: VideoFrame, face: FaceState, processing_started_ns: int
-    ) -> None:
+    def _process_frame(self, frame: VideoFrame, face: FaceState, captured_at_ns: int) -> None:
         references = self._reference_library.references()
         weights = self._last_reference_weights
         if self._rendering_failed:
@@ -1018,12 +1116,65 @@ class MainWindow(QMainWindow):
             self.compositing_latency_label.setText("—")
             self.complete_frame_latency_label.setText("—")
             return
+        if self._processing_future is not None and self._processing_future.done():
+            self._poll_processing()
+        request = _ProcessingRequest(
+            self._processing_generation,
+            frame,
+            face,
+            references,
+            weights,
+            captured_at_ns,
+        )
+        if self._processing_future is not None:
+            if self._pending_processing_request is not None:
+                self._processing_drops += 1
+                self.processing_drops_label.setText(str(self._processing_drops))
+            self._pending_processing_request = request
+            return
+        self._start_processing(request)
+
+    def _start_processing(self, request: _ProcessingRequest) -> None:
+        self._set_rendering_state("Processing", "opening")
+        self._processing_future = self._processing_executor.submit(
+            self._run_processing,
+            request.generation,
+            request.frame,
+            request.face,
+            request.references,
+            request.weights,
+            request.captured_at_ns,
+        )
+
+    def _run_processing(
+        self,
+        generation: int,
+        frame: VideoFrame,
+        face: FaceState,
+        references: tuple[PreparedReference, ...],
+        weights: tuple[ReferenceWeight, ...],
+        captured_at_ns: int,
+    ) -> _ProcessedFrame:
+        render_started = time.perf_counter_ns()
+        rendered = self._renderer.render(face, references, weights)
+        render_finished = time.perf_counter_ns()
+        output = self._compositor.composite(frame, rendered)
+        composite_finished = time.perf_counter_ns()
+        return _ProcessedFrame(
+            generation,
+            output,
+            (render_finished - render_started) / 1_000_000,
+            (composite_finished - render_finished) / 1_000_000,
+            captured_at_ns,
+        )
+
+    def _poll_processing(self) -> None:
+        future = self._processing_future
+        if future is None or not future.done():
+            return
+        self._processing_future = None
         try:
-            render_started = time.perf_counter_ns()
-            rendered = self._renderer.render(face, references, weights)
-            render_finished = time.perf_counter_ns()
-            output = self._compositor.composite(frame, rendered)
-            composite_finished = time.perf_counter_ns()
+            processed = future.result()
         except (StageError, ValueError) as exc:
             self._set_rendering_state("Error", "error")
             self.rendering_latency_label.setText("—")
@@ -1031,22 +1182,42 @@ class MainWindow(QMainWindow):
             self.complete_frame_latency_label.setText("—")
             self.statusBar().showMessage(f"Face rendering skipped: {exc}")
             self._logger.warning("Face rendering failed: %s", exc)
+            self._start_pending_processing()
             return
-        self._last_processed_image = self._frame_image(output)
-        self._set_rendering_state("Processed", "running")
-        self.rendering_latency_label.setText(
-            f"{(render_finished - render_started) / 1_000_000:.1f} ms"
-        )
-        self.compositing_latency_label.setText(
-            f"{(composite_finished - render_finished) / 1_000_000:.1f} ms"
-        )
-        self.complete_frame_latency_label.setText(
-            f"{(composite_finished - processing_started_ns) / 1_000_000:.1f} ms"
-        )
+        except Exception as exc:
+            self._set_rendering_state("Error", "error")
+            self.rendering_latency_label.setText("—")
+            self.compositing_latency_label.setText("—")
+            self.complete_frame_latency_label.setText("—")
+            self.statusBar().showMessage(f"Unexpected face processing failure: {exc}")
+            self._logger.exception("Unexpected face processing failure")
+            self._start_pending_processing()
+            return
+        publish = processed.generation == self._processing_generation and self._capturing
+        if publish:
+            self._last_processed_image = self._frame_image(processed.output)
+            self._set_rendering_state("Processed", "running")
+            self.rendering_latency_label.setText(f"{processed.rendering_ms:.1f} ms")
+            self.compositing_latency_label.setText(f"{processed.compositing_ms:.1f} ms")
+            self._render_last_image()
+            presented_at_ns = time.monotonic_ns()
+            self.complete_frame_latency_label.setText(
+                f"{(presented_at_ns - processed.captured_at_ns) / 1_000_000:.1f} ms"
+            )
+        self._start_pending_processing()
+
+    def _start_pending_processing(self) -> None:
+        request, self._pending_processing_request = self._pending_processing_request, None
+        if (
+            request is not None
+            and request.generation == self._processing_generation
+            and self._capturing
+        ):
+            self._start_processing(request)
 
     def _render_last_image(self) -> None:
-        display_image = self._oriented_preview_image()
-        if display_image is None:
+        base_image = self._base_preview_image()
+        if base_image is None:
             if self._preview_mode() == "processed":
                 self.preview_image.setPixmap(QPixmap())
                 if not self._last_reference_weights:
@@ -1057,20 +1228,27 @@ class MainWindow(QMainWindow):
                     self.preview_image.setText("Waiting for the next processed frame…")
             return
         if self._preview_mode() == "diagnostic" and self._last_face_state is not None:
-            display_image = display_image.copy()
-            self._draw_tracking_overlay(display_image, self._last_face_state)
-        pixmap = QPixmap.fromImage(display_image).scaled(
+            base_image = base_image.copy()
+            self._draw_tracking_overlay(base_image, self._last_face_state)
+        display_image = base_image.scaled(
             self.preview_image.size(),
             Qt.AspectRatioMode.KeepAspectRatio,
-            Qt.TransformationMode.SmoothTransformation,
+            Qt.TransformationMode.FastTransformation,
         )
-        self.preview_image.setPixmap(pixmap)
+        if self.mirror_preview_toggle.isChecked():
+            display_image = display_image.transformed(
+                QTransform().scale(-1.0, 1.0), Qt.TransformationMode.FastTransformation
+            )
+        self.preview_image.setPixmap(QPixmap.fromImage(display_image))
+
+    def _base_preview_image(self) -> QImage | None:
+        return (
+            self._last_processed_image if self._preview_mode() == "processed" else self._last_image
+        )
 
     def _oriented_preview_image(self) -> QImage | None:
         """Return display orientation without changing the canonical captured image."""
-        base_image = (
-            self._last_processed_image if self._preview_mode() == "processed" else self._last_image
-        )
+        base_image = self._base_preview_image()
         if base_image is None:
             return None
         if not self.mirror_preview_toggle.isChecked():
@@ -1090,6 +1268,8 @@ class MainWindow(QMainWindow):
         self._render_last_image()
 
     def _smoothing_toggled(self, enabled: bool) -> None:
+        self._processing_generation += 1
+        self._pending_processing_request = None
         self._stabilizer.reset()
         self._last_reference_weights = ()
         self._last_processed_image = None
@@ -1262,6 +1442,7 @@ class MainWindow(QMainWindow):
         self._clear_face_metrics()
         self.tracking_latency_label.setText("—")
         self.tracking_drops_label.setText("0")
+        self.processing_drops_label.setText(str(self._processing_drops))
         self._set_smoothing_state(
             "On" if self.smoothing_toggle.isChecked() else "Off",
             "running" if self.smoothing_toggle.isChecked() else "idle",
@@ -1319,11 +1500,13 @@ class MainWindow(QMainWindow):
         self._metrics_timer.stop()
         self._camera_executor.shutdown(wait=True, cancel_futures=True)
         self._source.close()
+        self._drain_processing()
         try:
             self._tracker.close()
         except StageError as exc:
             self._logger.warning("Face tracker shutdown failed: %s", exc)
         self._renderer.close()
+        self._processing_executor.shutdown(wait=True, cancel_futures=True)
         try:
             self._reference_session.flush()
         except StageError as exc:

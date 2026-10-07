@@ -80,15 +80,28 @@ class RendererConfig:
 
 
 @dataclass(frozen=True, slots=True)
+class PerformanceConfig:
+    tracking_fps: int = 10
+    opencv_threads: int = 4
+
+    def __post_init__(self) -> None:
+        _positive_integer("performance.tracking_fps", self.tracking_fps)
+        _positive_integer("performance.opencv_threads", self.opencv_threads)
+
+
+@dataclass(frozen=True, slots=True)
 class AppConfig:
     video: VideoConfig = field(default_factory=VideoConfig)
     logging: LoggingConfig = field(default_factory=LoggingConfig)
     renderer: RendererConfig = field(default_factory=RendererConfig)
+    performance: PerformanceConfig = field(default_factory=PerformanceConfig)
     debug: bool = False
 
     def __post_init__(self) -> None:
         if type(self.debug) is not bool:
             raise ConfigError("app.debug must be true or false")
+        if self.performance.tracking_fps > self.video.fps:
+            raise ConfigError("performance.tracking_fps cannot exceed video.fps")
 
 
 def _table(data: dict[str, Any], name: str, allowed: set[str]) -> dict[str, Any]:
@@ -114,13 +127,14 @@ def load_config(path: Path | None = None) -> AppConfig:
             data = tomllib.load(stream)
     except (OSError, ValueError) as exc:
         raise ConfigError(f"Cannot read configuration {path}: {exc}") from exc
-    unknown = data.keys() - {"app", "video", "logging", "renderer"}
+    unknown = data.keys() - {"app", "video", "logging", "renderer", "performance"}
     if unknown:
         raise ConfigError(f"Unknown configuration section(s): {', '.join(sorted(unknown))}")
     app = _table(data, "app", {"debug"})
     video = _table(data, "video", {"width", "height", "fps"})
     logging = _table(data, "logging", {"level", "directory", "max_bytes", "backup_count"})
     renderer = _table(data, "renderer", {"backend", "runtime_module", "model_directory", "device"})
+    performance = _table(data, "performance", {"tracking_fps", "opencv_threads"})
     if "directory" in logging:
         raw = logging["directory"]
         if not isinstance(raw, str) or not raw.strip():
@@ -143,5 +157,6 @@ def load_config(path: Path | None = None) -> AppConfig:
         video=VideoConfig(**video),
         logging=LoggingConfig(**logging),
         renderer=RendererConfig(**renderer),
+        performance=PerformanceConfig(**performance),
         **app,
     )
