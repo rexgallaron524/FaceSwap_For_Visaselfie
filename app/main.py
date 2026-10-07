@@ -11,15 +11,19 @@ from pathlib import Path
 from PySide6.QtCore import QTimer
 from PySide6.QtWidgets import QApplication
 
+from app.camera import OpenCVCameraSource
 from app.camera.protocol import CameraSource
 from app.config import AppConfig, ConfigError, load_config
 from app.diagnostics.logging_setup import close_logging, configure_logging
+from app.tracking import MediaPipeFaceTracker
+from app.tracking.protocol import FaceTracker
 from app.ui.main_window import MainWindow
 
 
 def create_application(
     config: AppConfig,
     camera_source_factory: Callable[[], CameraSource] | None = None,
+    face_tracker_factory: Callable[[], FaceTracker] | None = None,
 ) -> tuple[QApplication, MainWindow]:
     """Create the shell without starting the event loop or opening any devices."""
     application = QApplication.instance()
@@ -29,10 +33,10 @@ def create_application(
         raise RuntimeError("FaceLive requires a QApplication, not a QCoreApplication")
     application.setApplicationName("FaceLive")
     application.setOrganizationName("FaceLive")
-    window = (
-        MainWindow(config)
-        if camera_source_factory is None
-        else MainWindow(config, camera_source_factory)
+    window = MainWindow(
+        config,
+        camera_source_factory or OpenCVCameraSource,
+        face_tracker_factory or MediaPipeFaceTracker,
     )
     return application, window
 
@@ -56,7 +60,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         logger.info("Starting FaceLive; logs: %s", log_path)
         application, window = create_application(config)
         window.show()
-        logger.info("Application shell ready; camera preview available, processing inactive")
+        logger.info("Application shell ready; live tracking available, face replacement inactive")
         if args.smoke_test:
             QTimer.singleShot(250, window.close)
         exit_code = application.exec()

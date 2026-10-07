@@ -8,14 +8,7 @@ from pathlib import Path
 from types import MappingProxyType
 from typing import Protocol
 
-from app.pipeline.types import RGBImage, StageError
-
-
-@dataclass(frozen=True, slots=True)
-class NormalizedLandmark:
-    x: float
-    y: float
-    z: float = 0.0
+from app.pipeline.types import NormalizedLandmark, RGBImage, StageError
 
 
 @dataclass(frozen=True, slots=True)

@@ -100,6 +100,22 @@ def test_source_publishes_timestamped_immutable_rgb_latest_frames():
     assert captures[0].released
 
 
+def test_source_makes_equal_clock_ticks_strictly_increasing():
+    source = OpenCVCameraSource(
+        enumerator=lambda _backend: [device()],
+        capture_factory=FakeCapture,
+        monotonic_ns=lambda: 1_000,
+    )
+    camera = source.enumerate_devices()[0]
+    source.open(camera.device_id, FrameFormat(2, 1, 30))
+
+    first = wait_for_frame(source, 1)
+    second = wait_for_frame(source, first.frame_id + 1)
+
+    assert second.timestamp_ns > first.timestamp_ns
+    source.close()
+
+
 def test_source_rejects_virtual_or_missing_camera():
     source = OpenCVCameraSource(enumerator=lambda _backend: [device("Virtual Camera")])
     virtual = source.enumerate_devices()[0]

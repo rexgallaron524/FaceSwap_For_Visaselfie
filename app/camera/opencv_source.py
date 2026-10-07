@@ -75,6 +75,7 @@ class OpenCVCameraSource:
         self._latest: VideoFrame | None = None
         self._last_delivered_id = -1
         self._next_frame_id = 0
+        self._last_capture_timestamp_ns = -1
         self._error: StageError | None = None
         self._logger = logging.getLogger("facelive.camera")
 
@@ -176,7 +177,9 @@ class OpenCVCameraSource:
             raise StageError("Camera returned an unsupported image format")
         rgb = np.ascontiguousarray(cv2.cvtColor(bgr, cv2.COLOR_BGR2RGB), dtype=np.uint8)
         rgb.setflags(write=False)
-        return VideoFrame(frame_id=frame_id, timestamp_ns=self._monotonic_ns(), rgb=rgb)
+        timestamp_ns = max(self._monotonic_ns(), self._last_capture_timestamp_ns + 1)
+        self._last_capture_timestamp_ns = timestamp_ns
+        return VideoFrame(frame_id=frame_id, timestamp_ns=timestamp_ns, rgb=rgb)
 
     def _capture_loop(self, capture: Any, display_name: str) -> None:
         failed_since: float | None = None
@@ -220,10 +223,12 @@ class OpenCVCameraSource:
         self._stop_event.set()
         thread = self._thread
         capture = self._capture
+        if thread is not None and thread.is_alive():
+            thread.join(timeout=0.5)
         if capture is not None:
             capture.release()
         if thread is not None and thread.is_alive():
-            thread.join(timeout=2.0)
+            thread.join(timeout=1.5)
         if thread is not None and thread.is_alive():
             self._logger.warning("Camera capture worker did not stop within two seconds")
         with self._state_lock:
@@ -232,4 +237,5 @@ class OpenCVCameraSource:
             self._latest = None
             self._last_delivered_id = -1
             self._next_frame_id = 0
+            self._last_capture_timestamp_ns = -1
             self._error = None

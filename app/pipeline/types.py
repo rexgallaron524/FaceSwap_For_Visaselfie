@@ -6,6 +6,7 @@ from collections.abc import Mapping
 from dataclasses import dataclass, field
 from enum import Enum
 from math import isfinite
+from types import MappingProxyType
 
 import numpy as np
 from numpy.typing import NDArray
@@ -57,6 +58,15 @@ class Point2D:
 
 
 @dataclass(frozen=True, slots=True)
+class NormalizedLandmark:
+    """Backend-neutral landmark: normalized image x/y and face-width-relative z."""
+
+    x: float
+    y: float
+    z: float = 0.0
+
+
+@dataclass(frozen=True, slots=True)
 class Rect:
     x: float
     y: float
@@ -82,9 +92,55 @@ class FaceState:
     scale: float  # Face bounding width / full image width.
     pose: HeadPose
     landmarks: tuple[Point2D, ...]  # Full-frame pixels; topology identified below.
+    normalized_landmarks: tuple[NormalizedLandmark, ...]
     landmark_schema: str  # Versioned adapter-defined ordering, never inferred by count.
     tracking_confidence: float  # [0, 1]; adapter must document its derivation.
     blendshapes: Mapping[str, float] = field(default_factory=dict)  # [0, 1] coefficients.
+
+    def __post_init__(self) -> None:
+        if type(self.frame_id) is not int or self.frame_id < 0:
+            raise ValueError("FaceState frame ID must be a nonnegative integer")
+        if type(self.timestamp_ns) is not int or self.timestamp_ns < 0:
+            raise ValueError("FaceState timestamp must be a nonnegative integer")
+        numeric_values = (
+            self.bounds.x,
+            self.bounds.y,
+            self.bounds.width,
+            self.bounds.height,
+            self.center.x,
+            self.center.y,
+            self.scale,
+            self.pose.yaw,
+            self.pose.pitch,
+            self.pose.roll,
+            self.tracking_confidence,
+        )
+        if not all(isfinite(value) for value in numeric_values):
+            raise ValueError("FaceState geometry and confidence must be finite")
+        if self.bounds.width <= 0 or self.bounds.height <= 0 or self.scale <= 0:
+            raise ValueError("FaceState bounds and scale must be positive")
+        if not 0 <= self.tracking_confidence <= 1:
+            raise ValueError("FaceState tracking confidence must be in [0, 1]")
+        if not self.landmarks or len(self.landmarks) != len(self.normalized_landmarks):
+            raise ValueError("FaceState pixel and normalized landmarks must be nonempty and match")
+        if not all(isfinite(value) for point in self.landmarks for value in (point.x, point.y)):
+            raise ValueError("FaceState pixel landmarks must be finite")
+        if not all(
+            isfinite(value)
+            for point in self.normalized_landmarks
+            for value in (point.x, point.y, point.z)
+        ):
+            raise ValueError("FaceState normalized landmarks must be finite")
+        if not self.landmark_schema:
+            raise ValueError("FaceState landmark schema is required")
+        if not isinstance(self.blendshapes, Mapping):
+            raise ValueError("FaceState blendshapes must be a mapping")
+        if not all(
+            isfinite(float(value)) and 0 <= float(value) <= 1 for value in self.blendshapes.values()
+        ):
+            raise ValueError("FaceState blendshapes must be finite values in [0, 1]")
+        if not isinstance(self.blendshapes, MappingProxyType):
+            object.__setattr__(self, "blendshapes", MappingProxyType(dict(self.blendshapes)))
 
 
 class TrackingStatus(Enum):
@@ -100,6 +156,28 @@ class TrackingResult:
     status: TrackingStatus
     face: FaceState | None = None
     error: str | None = None
+    latency_ms: float | None = None
+
+    def __post_init__(self) -> None:
+        if type(self.frame_id) is not int or self.frame_id < 0:
+            raise ValueError("TrackingResult frame ID must be a nonnegative integer")
+        if type(self.timestamp_ns) is not int or self.timestamp_ns < 0:
+            raise ValueError("TrackingResult timestamp must be a nonnegative integer")
+        if self.latency_ms is not None and (not isfinite(self.latency_ms) or self.latency_ms < 0):
+            raise ValueError("Tracking latency must be finite and nonnegative")
+        if self.status is TrackingStatus.TRACKED:
+            if self.face is None or self.error is not None:
+                raise ValueError("TRACKED requires a face and no error")
+            if (self.face.frame_id, self.face.timestamp_ns) != (
+                self.frame_id,
+                self.timestamp_ns,
+            ):
+                raise ValueError("TrackingResult and FaceState identities must match")
+        elif self.status is TrackingStatus.NO_FACE:
+            if self.face is not None or self.error is not None:
+                raise ValueError("NO_FACE cannot carry a face or error")
+        elif self.face is not None or not self.error:
+            raise ValueError("ERROR requires an error and no face")
 
 
 @dataclass(frozen=True, slots=True)

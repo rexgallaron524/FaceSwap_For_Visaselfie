@@ -89,10 +89,10 @@ uv.lock
   boundaries. Change them only with an explicit migration or cache rebuild.
 - Original source images are not copied. The manifest and its asset directory form one
   library and must move together.
-- Expensive face detection and alignment happen during enrollment. Future per-frame code
-  consumes cached `PreparedReference` records through the existing library interface.
-- MediaPipe remains behind `ReferenceFaceDetector`; its objects and normalized coordinates
-  do not leak into pipeline records.
+- Expensive face detection and alignment happen during enrollment. Rendering code consumes
+  cached `PreparedReference` records through the existing library interface.
+- MediaPipe runtime objects remain inside the detector and tracker adapters. Pipeline records
+  expose only backend-neutral normalized landmark values.
 - A failed library load clears existing references so stale identity data cannot continue.
 - Automated validation establishes technical image usability. Pose accuracy and subject
   consistency remain enrollment responsibilities until an explicit pose/identity validator

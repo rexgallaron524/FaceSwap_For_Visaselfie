@@ -6,7 +6,7 @@
 - Python 3.12 x64. `.python-version` and `requires-python` intentionally select this
   minor version until later dependencies have been validated.
 - Network access for initial dependency/runtime installation. The Face Landmarker model is
-  versioned in `models/`, so enrollment and normal use stay local after checkout.
+  versioned in `models/`, so tracking, enrollment, and normal use stay local after checkout.
 
 ## Reproducible setup
 
@@ -105,8 +105,9 @@ They cover startup/clean shutdown, installed-package launch from another directo
 camera abstraction behavior, RGB conversion, timestamps, disconnect/reconnect UI state,
 configuration validation, bounded logging, reference validation, deterministic manifest
 serialization, checksum rejection, extensible slots, reference lookup, automatic saving,
-restart restoration, active-library switching, and the enrollment dialog shell. Tests use
-generated NumPy frames and a fake detector, so no webcam, GPU, or recorded face data is
+restart restoration, active-library switching, coordinate conversion, pose extraction,
+bounded asynchronous tracking, diagnostic values, and both UI shells. Tests use generated
+NumPy frames and fake camera/tracker backends, so no webcam, GPU, or recorded face data is
 needed.
 
 Run the optional physical-camera benchmark after closing other camera applications:
@@ -129,11 +130,15 @@ OpenCV and Windows camera discovery; pipeline records and sink protocol live in
 `app/pipeline/`. Each processing subsystem has a protocol module. `native/`,
 fixture assets, and tooling directories contain scope notes until their milestones begin.
 `app/reference/` owns enrollment models, the detector boundary, one-time preprocessing,
-and persistence. `models/face_landmarker.task` is the pinned local enrollment model; its
+and persistence. `models/face_landmarker.task` is the pinned local tracking/enrollment model; its
 provenance and checksum are in `models/README.md`. Read [architecture.md](architecture.md)
 before changing contracts or manifest formats.
+
+`app/tracking/mediapipe_tracker.py` owns the live MediaPipe adapter and its one-frame
+backpressure policy. `app/tracking/geometry.py` contains backend-independent coordinate,
+pose, blendshape-name, and confidence helpers. Keep MediaPipe objects inside the adapter.
 
 Inspect code before each milestone, state a plan, implement only that milestone,
 add applicable tests, run checks, update docs, and stop for the next instruction.
 The runtime must keep processing local. Do not add portrait-rendering or native-camera
-packages until their dedicated milestones. No installer is produced in milestone 3.
+packages until their dedicated milestones. No installer is produced in Milestones 2 or 3.

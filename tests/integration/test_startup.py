@@ -22,7 +22,7 @@ def test_application_starts_and_exits_cleanly(tmp_path, module):
     )
     assert result.returncode == 0, result.stdout + result.stderr
     log = (tmp_path / "FaceLive" / "logs" / "facelive.log").read_text(encoding="utf-8")
-    assert "Application shell ready; camera preview available, processing inactive" in log
+    assert "Application shell ready; live tracking available, face replacement inactive" in log
     assert "Application stopped (exit 0)" in log
 
 
@@ -47,7 +47,10 @@ import time
 import numpy as np
 from app.config import AppConfig
 from app.main import create_application
-from app.pipeline.types import CameraDevice, FrameFormat, StageError, VideoFrame
+from app.pipeline.types import (
+    CameraDevice, FaceState, FrameFormat, HeadPose, NormalizedLandmark, Point2D,
+    Rect, StageError, TrackingResult, TrackingStatus, VideoFrame,
+)
 from app.ui.reference_dialog import ReferenceEnrollmentDialog
 class FakeSource:
     def __init__(self):
@@ -72,8 +75,34 @@ class FakeSource:
         return VideoFrame(0, 1_000_000_000, pixels)
     def close(self):
         self.closed = True
+class FakeTracker:
+    def __init__(self):
+        self.latest = None
+        self.closed = False
+    def open(self):
+        self.closed = False
+    def submit(self, frame):
+        face = FaceState(
+            frame.frame_id, frame.timestamp_ns, Rect(0.0, 0.0, 2.0, 1.0),
+            Point2D(1.0, 0.5), 1.0, HeadPose(12.5, -3.0, 1.5),
+            (Point2D(1.0, 0.5),), (NormalizedLandmark(0.5, 0.5, 0.0),),
+            'test-landmarks-v1', 0.9,
+            {'mouth_smile_left': 0.6, 'mouth_smile_right': 0.8,
+             'eye_blink_left': 0.1, 'eye_blink_right': 0.2, 'jaw_open': 0.3},
+        )
+        self.latest = TrackingResult(
+            frame.frame_id, frame.timestamp_ns, TrackingStatus.TRACKED,
+            face=face, latency_ms=4.2,
+        )
+        return True
+    def poll_latest(self):
+        result, self.latest = self.latest, None
+        return result
+    def close(self):
+        self.closed = True
 source = FakeSource()
-application, window = create_application(AppConfig(), lambda: source)
+tracker = FakeTracker()
+application, window = create_application(AppConfig(), lambda: source, lambda: tracker)
 window.show()
 application.processEvents()
 assert window.windowTitle() == 'FaceLive'
@@ -90,7 +119,15 @@ assert window._capturing
 window._poll_camera()
 application.processEvents()
 assert window.capture_state_label.text() == 'Running'
+assert window.tracking_state_label.text() == 'Tracked'
+assert window.tracking_confidence_label.text() == '90% derived'
+assert window.head_pose_label.text() == '+12.5° · -3.0° · +1.5°'
+assert window.smile_label.text() == '70%'
+assert window.eye_closure_label.text() == '10% · 20%'
+assert window.mouth_activity_label.text() == '30% open'
+assert window.tracking_latency_label.text() == '4.2 ms'
 assert window.preview_image.pixmap() is not None
+assert window.diagnostic_overlay_toggle.isChecked()
 assert window.mirror_preview_toggle.isChecked()
 assert window._last_image.pixelColor(0, 0).red() == 255
 mirrored = window._oriented_preview_image()
@@ -134,6 +171,7 @@ window.close()
 application.processEvents()
 assert not window.isVisible()
 assert source.closed
+assert tracker.closed
 """
     result = subprocess.run(
         [sys.executable, "-c", script],

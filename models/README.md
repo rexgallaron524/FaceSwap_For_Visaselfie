@@ -3,7 +3,7 @@
 ## Face Landmarker
 
 `face_landmarker.task` is the official MediaPipe Face Landmarker float16 model bundle.
-It is used locally in image mode to validate and preprocess enrollment references.
+It is used locally in live-stream mode for tracking and image mode for enrollment.
 It contains face detection, 478-point face mesh, and blendshape models; it is not a
 portrait-generation model and is never sent over the network.
 
