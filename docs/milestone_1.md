@@ -11,6 +11,8 @@
   negotiated-format display, measured capture FPS, and skipped-preview count.
 - A **Mirror local preview** toggle, enabled by default, matching familiar video-call
   self-view behavior without changing capture or future outgoing-frame orientation.
+- A modern high-contrast dark theme with distinct primary/secondary actions, readable
+  disabled controls, clear focus/hover/pressed states, and color-coded session status.
 - Clean failure UI for unavailable/open/disconnected cameras. Reconnect is explicit:
   reconnect the camera, choose Refresh, and start preview again. No raw source changes
   or automatic camera switching occur.
@@ -56,6 +58,7 @@ Webcam. Exact package versions are locked in `uv.lock`.
 | `uv sync --locked` and `uv pip check` | Environment locked; packages compatible |
 | 8-second standalone camera benchmark | 1280×720, 30.0 device-reported FPS, 27.55 observed FPS, 0 skipped |
 | Automated native Qt preview | 1280×720, 25.7 observed FPS, visible frame, 0 skipped |
+| High-contrast UI visual QA | Idle at 1120×740 and 900×700; live preview at 1120×740 |
 
 The physical camera result is one run on available hardware, not a cross-device
 guarantee. Exposure, lighting, USB bandwidth, drivers, and other camera consumers can
@@ -79,6 +82,8 @@ change FPS. The target is approximately 30 FPS where supported; this run met tha
   Reconnection requires Refresh and Start preview; automatic reconnection is deferred.
 - Device IDs are stable for one adapter session and derived from the enumerated device
   path. Persistent saved camera preference is not implemented.
+- The supported minimum window size is 900×700 so camera controls, future controls, and
+  session metrics remain legible without overlap.
 
 Recommended next milestone: MediaPipe Face Landmarker integration producing the existing
 backend-independent `FaceState`, with tracking overlays and stage timing. Stop here until

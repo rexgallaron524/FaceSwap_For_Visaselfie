@@ -49,25 +49,155 @@ class MainWindow(QMainWindow):
 
         self.setWindowTitle("FaceLive")
         self.resize(1120, 740)
-        self.setMinimumSize(900, 620)
+        self.setMinimumSize(900, 700)
         self.setStyleSheet("""
-            QMainWindow, QWidget#shell { background: #101820; color: #edf3f7; }
-            QLabel { color: #edf3f7; }
-            QLabel#title { font-size: 28px; font-weight: 600; }
-            QLabel#subtitle, QLabel#hint { color: #aabac7; }
-            QGroupBox { color: #edf3f7; border: 1px solid #354550;
-                        border-radius: 8px; margin-top: 16px; padding: 16px; }
-            QGroupBox::title { subcontrol-origin: margin; left: 14px; padding: 0 5px; }
-            QPushButton, QComboBox { padding: 9px; border: 1px solid #4a5c69;
-                                    border-radius: 5px; background: #23313c; }
-            QPushButton:disabled, QComboBox:disabled, QCheckBox:disabled { color: #aabac7; }
-            QFrame#preview { background: #17232d; border: 1px solid #354550;
-                             border-radius: 10px; }
-            QLabel#previewImage { color: #aabac7; font-size: 18px; }
-            QLabel#badge { color: #85dbc9; font-weight: 600; }
-            QStatusBar { background: #17232d; color: #aabac7; }
-            QMenuBar, QMenu { background: #17232d; color: #edf3f7; }
-            QMenuBar::item:selected, QMenu::item:selected { background: #354550; }
+            * {
+                font-family: "Segoe UI Variable", "Segoe UI";
+                font-size: 14px;
+            }
+            QMainWindow, QWidget#shell {
+                background: #0b1017;
+                color: #f4f7fb;
+            }
+            QLabel { color: #f4f7fb; background: transparent; }
+            QLabel#title {
+                color: #ffffff;
+                font-size: 30px;
+                font-weight: 700;
+            }
+            QLabel#subtitle {
+                color: #c4ced9;
+                font-size: 15px;
+            }
+            QLabel#hint { color: #b5c0cd; }
+            QLabel#fieldLabel, QLabel#metricLabel {
+                color: #c9d3de;
+                font-weight: 500;
+            }
+            QLabel#metricValue {
+                color: #ffffff;
+                font-size: 16px;
+                font-weight: 700;
+            }
+            QLabel#stateValue {
+                color: #d6dee8;
+                font-size: 16px;
+                font-weight: 700;
+            }
+            QLabel#stateValue[state="running"] { color: #5ee6a8; }
+            QLabel#stateValue[state="opening"] { color: #7cc7ff; }
+            QLabel#stateValue[state="error"] { color: #ff858d; }
+            QGroupBox {
+                color: #f4f7fb;
+                background: #151c25;
+                border: 1px solid #344252;
+                border-radius: 12px;
+                margin-top: 17px;
+                padding: 18px;
+                font-weight: 600;
+            }
+            QGroupBox::title {
+                subcontrol-origin: margin;
+                left: 16px;
+                padding: 0 7px;
+                color: #eaf0f6;
+                background: #151c25;
+            }
+            QPushButton {
+                min-height: 40px;
+                padding: 0 15px;
+                color: #f7faff;
+                background: #222d39;
+                border: 1px solid #536477;
+                border-radius: 8px;
+                font-weight: 600;
+            }
+            QPushButton:hover {
+                background: #2c3947;
+                border-color: #8294a8;
+            }
+            QPushButton:pressed { background: #19232e; }
+            QPushButton:focus { border: 2px solid #79b8ff; }
+            QPushButton#primaryButton {
+                color: #ffffff;
+                background: #1677e8;
+                border-color: #4398f4;
+            }
+            QPushButton#primaryButton:hover {
+                background: #2588f5;
+                border-color: #76b6ff;
+            }
+            QPushButton#primaryButton:pressed { background: #0f63c6; }
+            QPushButton:disabled {
+                color: #8996a5;
+                background: #1a222c;
+                border-color: #313d4b;
+            }
+            QComboBox {
+                min-height: 40px;
+                padding: 0 38px 0 12px;
+                color: #ffffff;
+                background: #202a35;
+                border: 1px solid #56687b;
+                border-radius: 8px;
+                selection-background-color: #1677e8;
+                selection-color: #ffffff;
+            }
+            QComboBox:hover { border-color: #8194aa; }
+            QComboBox:focus { border: 2px solid #79b8ff; }
+            QComboBox:disabled {
+                color: #8996a5;
+                background: #1a222c;
+                border-color: #313d4b;
+            }
+            QComboBox::drop-down { border: 0; width: 34px; }
+            QComboBox QAbstractItemView {
+                color: #f4f7fb;
+                background: #202a35;
+                border: 1px solid #536477;
+                selection-background-color: #1677e8;
+                selection-color: #ffffff;
+                outline: 0;
+            }
+            QCheckBox {
+                color: #edf2f7;
+                spacing: 9px;
+                min-height: 28px;
+            }
+            QCheckBox:disabled { color: #8996a5; }
+            QCheckBox:focus { color: #ffffff; }
+            QFrame#preview {
+                background: #090d12;
+                border: 1px solid #3c4b5d;
+                border-radius: 12px;
+            }
+            QLabel#previewImage {
+                color: #d3dce6;
+                font-size: 18px;
+                font-weight: 500;
+            }
+            QLabel#badge {
+                color: #79c7ff;
+                font-size: 13px;
+                font-weight: 700;
+            }
+            QStatusBar {
+                color: #c5d0dc;
+                background: #111821;
+                border-top: 1px solid #2f3b49;
+            }
+            QMenuBar, QMenu { color: #f4f7fb; background: #111821; }
+            QMenuBar::item { padding: 7px 10px; }
+            QMenuBar::item:selected, QMenu::item:selected {
+                color: #ffffff;
+                background: #263443;
+            }
+            QToolTip {
+                color: #ffffff;
+                background: #263443;
+                border: 1px solid #64778c;
+                padding: 6px;
+            }
         """)
         self._build_ui()
 
@@ -87,8 +217,8 @@ class MainWindow(QMainWindow):
         shell.setObjectName("shell")
         self.setCentralWidget(shell)
         layout = QVBoxLayout(shell)
-        layout.setContentsMargins(28, 24, 28, 20)
-        layout.setSpacing(18)
+        layout.setContentsMargins(30, 24, 30, 18)
+        layout.setSpacing(8)
 
         title = QLabel("FaceLive")
         title.setObjectName("title")
@@ -98,20 +228,29 @@ class MainWindow(QMainWindow):
         layout.addWidget(subtitle)
 
         content = QHBoxLayout()
-        content.setSpacing(22)
+        content.setSpacing(24)
+        content.setContentsMargins(0, 16, 0, 0)
         controls = QVBoxLayout()
+        controls.setSpacing(16)
         sources = QGroupBox("Camera input")
-        sources.setFixedWidth(285)
+        sources.setFixedWidth(300)
+        sources.setMinimumHeight(250)
         source_layout = QVBoxLayout(sources)
-        source_layout.addWidget(QLabel("Physical camera"))
+        source_layout.setContentsMargins(18, 22, 18, 18)
+        source_layout.setSpacing(11)
+        camera_label = QLabel("Physical camera")
+        camera_label.setObjectName("fieldLabel")
+        source_layout.addWidget(camera_label)
         self.camera_selector = QComboBox()
         self.camera_selector.setEnabled(False)
         source_layout.addWidget(self.camera_selector)
         camera_buttons = QHBoxLayout()
         self.refresh_button = QPushButton("Refresh")
+        self.refresh_button.setObjectName("secondaryButton")
         self.refresh_button.clicked.connect(self.refresh_cameras)
         camera_buttons.addWidget(self.refresh_button)
         self.capture_button = QPushButton("Start preview")
+        self.capture_button.setObjectName("primaryButton")
         self.capture_button.setEnabled(False)
         self.capture_button.clicked.connect(self.toggle_capture)
         camera_buttons.addWidget(self.capture_button)
@@ -133,7 +272,10 @@ class MainWindow(QMainWindow):
         controls.addWidget(sources)
 
         future = QGroupBox("Later milestones")
+        future.setMinimumHeight(195)
         future_layout = QVBoxLayout(future)
+        future_layout.setContentsMargins(18, 22, 18, 18)
+        future_layout.setSpacing(11)
         self.load_references = QPushButton("Load references…")
         self.load_references.setEnabled(False)
         future_layout.addWidget(self.load_references)
@@ -148,6 +290,7 @@ class MainWindow(QMainWindow):
         content.addLayout(controls)
 
         preview_column = QVBoxLayout()
+        preview_column.setSpacing(12)
         preview_heading = QLabel("LIVE PREVIEW")
         preview_heading.setObjectName("badge")
         preview_column.addWidget(preview_heading)
@@ -164,13 +307,27 @@ class MainWindow(QMainWindow):
         preview_column.addWidget(preview, 1)
 
         metrics = QGroupBox("Capture session")
+        metrics.setObjectName("metricsCard")
         metrics_layout = QFormLayout(metrics)
+        metrics_layout.setContentsMargins(18, 22, 18, 18)
+        metrics_layout.setHorizontalSpacing(34)
+        metrics_layout.setVerticalSpacing(10)
         self.capture_state_label = QLabel("Idle")
+        self.capture_state_label.setObjectName("stateValue")
+        self.capture_state_label.setProperty("state", "idle")
         self.capture_fps_label = QLabel("—")
+        self.capture_fps_label.setObjectName("metricValue")
         self.preview_drops_label = QLabel("0")
-        metrics_layout.addRow("State", self.capture_state_label)
-        metrics_layout.addRow("Measured capture FPS", self.capture_fps_label)
-        metrics_layout.addRow("Frames skipped by preview", self.preview_drops_label)
+        self.preview_drops_label.setObjectName("metricValue")
+        state_label = QLabel("State")
+        state_label.setObjectName("metricLabel")
+        fps_label = QLabel("Measured capture FPS")
+        fps_label.setObjectName("metricLabel")
+        drops_label = QLabel("Frames skipped by preview")
+        drops_label.setObjectName("metricLabel")
+        metrics_layout.addRow(state_label, self.capture_state_label)
+        metrics_layout.addRow(fps_label, self.capture_fps_label)
+        metrics_layout.addRow(drops_label, self.preview_drops_label)
         preview_column.addWidget(metrics)
         content.addLayout(preview_column, 1)
         layout.addLayout(content, 1)
@@ -236,7 +393,7 @@ class MainWindow(QMainWindow):
         self.refresh_button.setEnabled(False)
         self.capture_button.setText("Opening…")
         self.capture_button.setEnabled(False)
-        self.capture_state_label.setText("Opening")
+        self._set_capture_state("Opening", "opening")
         self.preview_image.setText("Opening camera…")
         self.statusBar().showMessage("Opening the selected physical camera…")
         self._open_future = self._camera_executor.submit(
@@ -272,7 +429,7 @@ class MainWindow(QMainWindow):
         self._capturing = True
         self.capture_button.setText("Stop preview")
         self.capture_button.setEnabled(True)
-        self.capture_state_label.setText("Running")
+        self._set_capture_state("Running", "running")
         self.camera_format_label.setText(
             f"Active: {negotiated.width} × {negotiated.height} · "
             f"device reports {negotiated.fps:.1f} FPS"
@@ -292,7 +449,7 @@ class MainWindow(QMainWindow):
         self.refresh_button.setEnabled(True)
         self.capture_button.setText("Start preview")
         self.capture_button.setEnabled(bool(self._devices))
-        self.capture_state_label.setText("Idle")
+        self._set_capture_state("Idle", "idle")
         self.capture_fps_label.setText("—")
         self.preview_drops_label.setText("0")
         self.preview_image.setPixmap(QPixmap())
@@ -310,7 +467,7 @@ class MainWindow(QMainWindow):
             detail = str(exc)
             self._logger.warning("Camera capture stopped: %s", detail)
             self.stop_capture(message=f"Camera error: {detail}")
-            self.capture_state_label.setText("Disconnected")
+            self._set_capture_state("Disconnected", "error")
             self.preview_image.setText(
                 "Camera disconnected or stopped responding.\nReconnect it, then choose Refresh."
             )
@@ -358,9 +515,15 @@ class MainWindow(QMainWindow):
         self.capture_fps_label.setText("—" if fps is None else f"{fps:.1f}")
         self.preview_drops_label.setText(str(self._metrics.preview_drops))
 
+    def _set_capture_state(self, text: str, state: str) -> None:
+        self.capture_state_label.setText(text)
+        self.capture_state_label.setProperty("state", state)
+        self.capture_state_label.style().unpolish(self.capture_state_label)
+        self.capture_state_label.style().polish(self.capture_state_label)
+
     def _show_camera_error(self, detail: str) -> None:
         self._logger.warning("Camera operation failed: %s", detail)
-        self.capture_state_label.setText("Error")
+        self._set_capture_state("Error", "error")
         self.preview_image.setText(f"Camera unavailable.\n{detail}")
         self.statusBar().showMessage(f"Camera error: {detail}")
 
