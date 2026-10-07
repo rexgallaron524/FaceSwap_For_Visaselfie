@@ -1,3 +1,4 @@
+from dataclasses import replace
 from math import cos, pi, sin, sqrt
 
 import numpy as np
@@ -18,7 +19,11 @@ from app.pipeline.types import (
     VideoFrame,
 )
 from app.rendering import GeometricFaceRenderer
-from app.rendering.geometric import _FACE_OVAL, delaunay_triangle_indices
+from app.rendering.geometric import (
+    _FACE_OVAL,
+    delaunay_triangle_indices,
+    expression_adjusted_landmarks,
+)
 
 SCHEMA = "mediapipe-face-landmarker-478-v1"
 
@@ -132,6 +137,29 @@ def test_compositor_preserves_pixels_outside_alpha_and_frame_identity():
     assert output.rgb[6, 8].tolist() == [220, 40, 20]
     assert original.rgb[6, 8].tolist() == [10, 20, 180]
     assert not output.rgb.flags.writeable
+
+
+def test_expression_geometry_closes_eyes_opens_mouth_and_lifts_smile_corners():
+    original_face = tracked_face()
+    expressive = replace(
+        original_face,
+        blendshapes={
+            "eye_blink_left": 1.0,
+            "eye_blink_right": 1.0,
+            "jaw_open": 1.0,
+            "mouth_smile_left": 1.0,
+            "mouth_smile_right": 1.0,
+        },
+    )
+    points = np.asarray([(point.x, point.y) for point in expressive.landmarks], np.float32)
+
+    adjusted = expression_adjusted_landmarks(expressive, points)
+
+    assert abs(adjusted[159, 1] - adjusted[145, 1]) < abs(points[159, 1] - points[145, 1])
+    assert abs(adjusted[386, 1] - adjusted[374, 1]) < abs(points[386, 1] - points[374, 1])
+    assert adjusted[14, 1] - adjusted[13, 1] > points[14, 1] - points[13, 1]
+    assert adjusted[61, 0] < points[61, 0]
+    assert adjusted[291, 0] > points[291, 0]
 
 
 def test_renderer_and_compositor_reject_incompatible_inputs():

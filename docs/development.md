@@ -92,7 +92,9 @@ Choose the preview mode below **Mirror local preview**:
   facial compositing. It requires at least one enrolled reference.
 
 The diagnostics panel reports tracking, rendering, compositing, and complete-frame time.
-Processed output is currently a maintainable CPU prototype and may run below camera FPS.
+It also reports smoothing time and the current translation/pose correction. Disable
+**Temporal smoothing** to compare raw and stabilized behavior. Processed output is currently
+a maintainable CPU prototype and may run below camera FPS.
 
 Logs go to `%LOCALAPPDATA%\FaceLive\logs\facelive.log` by default, with three backups
 and a 2,000,000-byte rotation threshold. Without `LOCALAPPDATA`, the path is
@@ -118,8 +120,9 @@ serialization, checksum rejection, extensible slots, reference lookup, automatic
 restart restoration, active-library switching, coordinate conversion, pose extraction,
 bounded asynchronous tracking, diagnostic values, geometric triangle warping, continuous
 reference interpolation, feathered masks, compositing invariants, and both UI shells. Tests
-use generated NumPy frames and fake camera/tracker backends, so no webcam, GPU, or recorded
-face data is needed.
+also cover temporal geometry, expression and weight transitions, bounded tracking holds,
+and the controlled MP4 contract. No webcam, GPU, or recorded real-person face data is
+needed.
 
 Run the optional physical-camera benchmark after closing other camera applications:
 
@@ -152,6 +155,10 @@ pose, blendshape-name, and confidence helpers. Keep MediaPipe objects inside the
 developer visualization is `app/ui/reference_weights.py`. `app/rendering/geometric.py`
 owns deterministic landmark warping and mask generation; `app/compositing/alpha.py` owns
 local color matching and immutable alpha composition.
+`app/stabilization/temporal.py` owns time-based smoothing and short-gap recovery. The
+repeatable fixture generator is `tools/test_clips/generate_controlled_motion.py`, and
+`tools/benchmarks/temporal_pipeline.py` compares the complete local pipeline with smoothing
+enabled or disabled.
 
 Responsive UI checks cover wide (three-column), medium (two-column), and compact
 (single-column scrolling) window geometries. When changing shell cards or typography,
@@ -161,4 +168,4 @@ workspace gains a vertical scrollbar instead of shrinking its contents.
 Inspect code before each milestone, state a plan, implement only that milestone,
 add applicable tests, run checks, update docs, and stop for the next instruction.
 The runtime must keep processing local. Do not add portrait-rendering or native-camera
-packages until their dedicated milestones. No installer is produced in Milestones 2–5.
+packages until their dedicated milestones. No installer is produced in Milestones 2–6.

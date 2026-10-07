@@ -2,11 +2,12 @@
 
 ## Status and scope
 
-Milestones 2 through 5 implement the desktop shell, physical-camera preview, asynchronous
+Milestones 2 through 6 implement the desktop shell, physical-camera preview, asynchronous
 single-face tracking, diagnostics, local reference enrollment, continuous pose-space
 selection, and deterministic geometric face replacement. Tracking produces the
 backend-independent `FaceState`; selected references are warped to its landmark mesh and
-composited through a feathered facial mask. Stabilization and virtual output remain planned. Target
+composited through a feathered facial mask. Temporal stabilization now covers geometry,
+expressions, and selection weights; virtual output remains planned. Target
 platform: Windows 11 x64, initial input/output 1280×720 at 30 FPS.
 
 Python 3.12 is the tested minor version. PySide6 supplies the desktop UI, NumPy supplies
@@ -21,9 +22,8 @@ deferred. Importing modules never opens hardware or initializes either landmarke
 flowchart LR
     Camera[Physical CameraSource] --> Frame[Bounded frame retention]
     Frame --> Tracker[Async FaceTracker]
-    Tracker -->|current FaceState| Selector[ReferenceSelector]
-    Tracker -. future smoothing .-> Stabilizer
-    Stabilizer -. future stabilized state .-> Selector
+    Tracker --> Stabilizer[Temporal Stabilizer]
+    Stabilizer -->|current FaceState| Selector[ReferenceSelector]
     Library[Prepared ReferenceLibrary] --> Selector
     Library --> Renderer[FaceRenderer]
     Selector --> Renderer
@@ -61,7 +61,8 @@ runtime validators. `OpenCVCameraSource` implements camera input and
 implements the stable `ReferenceLibrary` surface plus enrollment, persistence, and
 slot-management operations. `PoseSpaceReferenceSelector` implements continuous selection.
 `GeometricFaceRenderer` and `AlphaFaceCompositor` implement the first deterministic output
-path. Other stages and their boundary validation will accompany their milestones.
+path. `TemporalStabilizer` implements time-based geometry, expression, and weight smoothing
+plus a bounded tracking hold. Other stages accompany their milestones.
 
 The data records are in `app/pipeline/types.py`. Qt, MediaPipe, OpenCV, and Windows
 objects must remain inside adapters. Stage failures use `StageError`; programming
@@ -179,6 +180,18 @@ errors must be logged and handled at the orchestration boundary as processing fa
   feathering. The compositor performs bounded per-channel mean/contrast correction within
   that region, then alpha blends into a new frame. Pixels where alpha is zero remain exactly
   equal to the original camera frame.
+- Temporal smoothing is elapsed-time based. Translation uses a 65 ms time constant, scale
+  90 ms, pose 80 ms, general landmarks 55 ms, eye/lip landmarks 32 ms, and reference
+  weights 110 ms. Large intentional motion raises geometry response, while low tracking
+  confidence lowers measurement influence.
+- Expressions use separate attack/release constants: blink 18/45 ms, mouth 35/65 ms, and
+  smile 90/140 ms. The renderer uses stabilized blendshapes to reinforce eye closure,
+  smile corners, lip separation, and a basic mouth cavity. Missing expression coefficients
+  remain unavailable rather than being fabricated by the stabilizer.
+- A `NO_FACE` result may reuse the last stabilized state for at most 150 ms. The held state
+  receives the current frame ID/timestamp, confidence decays with age, and dynamic eye/mouth
+  expressions decay toward neutral. Longer losses clear smoothing history and processed
+  output. This hold never permits an old rendered frame to be composited onto a new frame.
 
 ### Scheduling and lifetime
 
@@ -206,6 +219,9 @@ errors must be logged and handled at the orchestration boundary as processing fa
   through the tracker's existing one-frame backpressure path. Stage timings use
   `perf_counter_ns`; complete-frame time starts when that retained frame is submitted for
   tracking and ends after composition.
+- The UI can bypass stabilization explicitly for comparison. Toggling it or changing the
+  camera/reference library resets face and weight history. Diagnostics report stabilization
+  cost plus the current translation and maximum pose correction.
 - Synchronous stage faults raise `StageError`; asynchronous faults return `ERROR`.
   Close/clear/reset operations are idempotent. Close stops worker callbacks before
   releasing buffers. Calls are serialized by the future pipeline controller; arbitrary
@@ -243,7 +259,7 @@ shows an unavailable/waiting state. No milestone emits virtual-camera video yet.
 
 | Event | Intended behavior |
 | --- | --- |
-| Tracking lost / unsupported pose | Placeholder, show reason, reset smoothing |
+| Tracking lost / unsupported pose | Hold up to 150 ms, then placeholder and reset smoothing |
 | No library / library load fails | Placeholder; a failed load clears the previous subject |
 | Physical camera disconnect | Placeholder; report input failure, no automatic source switch |
 | Virtual consumer disconnect | Keep preview and processing; drop unconsumed frames |
@@ -279,6 +295,13 @@ compositing, and complete-frame timings because reference count, face size, CPU,
 content materially affect throughput. These results establish a maintainable CPU baseline;
 they do not claim 30 FPS processed output.
 
+The Milestone 6 controlled-clip comparison at 640×360 measured 8.79 output FPS with
+smoothing and 9.41 FPS without it. Mean processing latency was 92.84 ms smoothed versus
+83.03 ms raw; mean total latency was 113.07 versus 105.32 ms. In the isolated three-frame
+dropout, smoothing produced 25/25 outputs by holding exactly three frames, while raw mode
+produced 22/25. Full parameters, p95 values, commands, and remaining artifacts are recorded
+in `docs/milestone_6.md`.
+
 After the preview pipeline is stable, implement a C++ Media Foundation custom Media
 Source registered using `MFCreateVirtualCamera`, based on Microsoft's Windows Camera
 sample. Keep all ML/image processing outside that layer. A versioned shared-memory
@@ -294,5 +317,6 @@ and ABI details require their own milestone. `FrameSink` is a Python abstraction
 - [MediaPipe Face Landmarker models](https://developers.google.com/edge/mediapipe/solutions/vision/face_landmarker/index#models)
 - [uv Python provisioning](https://docs.astral.sh/uv/guides/install-python/)
 
-Neural refinement is deferred until deterministic geometry has been evaluated. Continue
-only after an explicit instruction for the next milestone.
+Milestone 6 found deterministic geometry sufficient for pipeline validation but insufficient
+for final visual quality. Neural refinement remains deferred until an explicit instruction
+for its milestone.

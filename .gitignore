@@ -18,6 +18,7 @@ models/*
 !models/LICENSE.face-landmarker.txt
 tests/assets/*
 !tests/assets/README.md
+!tests/assets/controlled_motion.mp4
 references/
 .idea/
 .vscode/

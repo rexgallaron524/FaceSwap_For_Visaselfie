@@ -22,7 +22,7 @@ def test_application_starts_and_exits_cleanly(tmp_path, module):
     )
     assert result.returncode == 0, result.stdout + result.stderr
     log = (tmp_path / "FaceLive" / "logs" / "facelive.log").read_text(encoding="utf-8")
-    assert "Application shell ready; geometric face replacement preview available" in log
+    assert "Application shell ready; temporally stabilized face preview available" in log
     assert "Application stopped (exit 0)" in log
 
 
@@ -115,7 +115,7 @@ metric_labels = [
     label for label in window.diagnostics_card.findChildren(QLabel)
     if label.objectName() == 'metricLabel'
 ]
-assert len(metric_labels) == 15
+assert len(metric_labels) == 18
 assert all(label.height() >= label.fontMetrics().height() for label in metric_labels)
 assert all(
     bar.minimumHeight() >= bar.fontMetrics().height()
@@ -169,6 +169,11 @@ assert set(window.reference_weight_view.displayed_weights().values()) == {0.0}
 assert window.preview_image.pixmap() is not None
 assert window.preview_mode_selector.currentData() == 'diagnostic'
 assert window.preview_mode_selector.count() == 3
+assert window.smoothing_toggle.isChecked()
+assert window.smoothing_state_label.text() == 'On'
+window.smoothing_toggle.setChecked(False)
+assert window.smoothing_state_label.text() == 'Off'
+window.smoothing_toggle.setChecked(True)
 assert window.mirror_preview_toggle.isChecked()
 assert window._last_image.pixelColor(0, 0).red() == 255
 mirrored = window._oriented_preview_image()

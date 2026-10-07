@@ -4,13 +4,14 @@ Local Windows 11 x64 desktop application for a consenting user's prepared refere
 appearance. The intended pipeline preserves the live body and surroundings while
 replacing only the facial region.
 
-**Current implementation: Milestones 2 through 5 — geometric face replacement.**
+**Current implementation: Milestones 2 through 6 — stabilized geometric replacement.**
 The app tracks one face asynchronously, displays a diagnostic mesh, pose, confidence,
 expressions, and latency. Its reference dialog
 enrolls the eight initial pose/expression images into a persistent local library. Continuous
 pose-space weights drive a deterministic landmark warp and feathered facial composite.
-Original, diagnostic, and processed previews are available. Neural rendering and
-virtual-camera output remain inactive.
+Temporal smoothing stabilizes pose, landmarks, expressions, and reference weights; short
+tracking gaps are held briefly. Original, diagnostic, and processed previews are available.
+Neural rendering and virtual-camera output remain inactive.
 
 ## Quick start (PowerShell)
 
@@ -43,6 +44,7 @@ uv run --locked facelive --smoke-test
 - [Milestone 3 change inventory, tests, and observed performance](docs/milestone_3.md)
 - [Milestone 4 change inventory and interpolation rules](docs/milestone_4.md)
 - [Milestone 5 geometric rendering, compositing, and performance](docs/milestone_5.md)
+- [Milestone 6 temporal stability, expressions, and evaluation](docs/milestone_6.md)
 
 All processing is intended to stay local. Future functionality is for the user's
 own face or explicitly consenting subjects. Identity verification, liveness/proctoring

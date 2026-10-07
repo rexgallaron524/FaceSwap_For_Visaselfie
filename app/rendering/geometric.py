@@ -135,6 +135,120 @@ _FEATURE_CONTOURS = (
 )
 _MESH_INDICES = tuple(sorted(set(range(0, 468, 6)) | set(_FACE_OVAL) | set(_FEATURE_CONTOURS)))
 _WEIGHT_EPSILON = 1e-8
+_EYE_GROUPS = (
+    ((33, 133), (7, 144, 145, 153, 154, 155, 157, 158, 159, 160, 161, 163, 173, 246)),
+    ((362, 263), (249, 373, 374, 380, 381, 382, 384, 385, 386, 387, 388, 390, 398, 466)),
+)
+_MOUTH_POINTS = (
+    0,
+    13,
+    14,
+    17,
+    37,
+    39,
+    40,
+    61,
+    78,
+    80,
+    81,
+    82,
+    84,
+    87,
+    88,
+    91,
+    95,
+    146,
+    178,
+    181,
+    185,
+    191,
+    267,
+    269,
+    270,
+    291,
+    308,
+    310,
+    311,
+    312,
+    314,
+    317,
+    318,
+    321,
+    324,
+    375,
+    402,
+    405,
+    409,
+    415,
+)
+_INNER_LIP = (
+    78,
+    95,
+    88,
+    178,
+    87,
+    14,
+    317,
+    402,
+    318,
+    324,
+    308,
+    415,
+    310,
+    311,
+    312,
+    13,
+    82,
+    81,
+    80,
+    191,
+)
+
+
+def expression_adjusted_landmarks(face: FaceState, points: np.ndarray) -> np.ndarray:
+    """Apply small blendshape-driven corrections to live landmark geometry."""
+    adjusted = np.asarray(points, dtype=np.float32).copy()
+    if adjusted.shape != (len(face.landmarks), 2):
+        raise ValueError("Expression geometry must match the FaceState landmark count")
+
+    blink_values = (
+        float(face.blendshapes.get("eye_blink_right", 0.0)),
+        float(face.blendshapes.get("eye_blink_left", 0.0)),
+    )
+    for (corners, contour), blink in zip(_EYE_GROUPS, blink_values, strict=True):
+        closure = min(1.0, max(0.0, blink)) * 0.82
+        if closure <= 0.0:
+            continue
+        center_y = float(np.mean(adjusted[np.asarray(corners), 1]))
+        indices = np.asarray(contour)
+        adjusted[indices, 1] += (center_y - adjusted[indices, 1]) * closure
+
+    jaw_open = min(1.0, max(0.0, float(face.blendshapes.get("jaw_open", 0.0))))
+    if jaw_open > 0.0:
+        center_y = float((adjusted[13, 1] + adjusted[14, 1]) / 2.0)
+        indices = np.asarray(_MOUTH_POINTS)
+        adjusted[indices, 1] = center_y + (adjusted[indices, 1] - center_y) * (
+            1.0 + 0.28 * jaw_open
+        )
+        minimum_gap = face.bounds.height * 0.032 * jaw_open
+        gap = float(adjusted[14, 1] - adjusted[13, 1])
+        if gap < minimum_gap:
+            correction = (minimum_gap - gap) / 2.0
+            adjusted[13, 1] -= correction
+            adjusted[14, 1] += correction
+
+    smile_values = [
+        float(face.blendshapes[name])
+        for name in ("mouth_smile_left", "mouth_smile_right")
+        if name in face.blendshapes
+    ]
+    smile = sum(smile_values) / len(smile_values) if smile_values else 0.0
+    if smile > 0.0:
+        horizontal = face.bounds.width * 0.018 * smile
+        vertical = face.bounds.height * 0.010 * smile
+        adjusted[61] += (-horizontal, -vertical)
+        adjusted[291] += (horizontal, -vertical)
+    return adjusted
 
 
 def delaunay_triangle_indices(
@@ -247,7 +361,9 @@ class GeometricFaceRenderer:
             )
             for reference, _ in selected
         }
-        target_all = np.asarray([(point.x, point.y) for point in face.landmarks], np.float32)
+        target_all = expression_adjusted_landmarks(
+            face, np.asarray([(point.x, point.y) for point in face.landmarks], np.float32)
+        )
         triangles = self._triangles
         if triangles is None:
             topology_reference = selected[0][0]
@@ -307,6 +423,15 @@ class GeometricFaceRenderer:
             region += blended * mask
             coverage_region = coverage[y0:y1, x0:x1]
             np.maximum(coverage_region, triangle_mask, out=coverage_region)
+
+        jaw_open = min(1.0, max(0.0, float(face.blendshapes.get("jaw_open", 0.0))))
+        if jaw_open > 0.08:
+            mouth = np.rint(target_all[np.asarray(_INNER_LIP)]).astype(np.int32)
+            mouth_mask = np.zeros((height, width), dtype=np.uint8)
+            cv2.fillConvexPoly(mouth_mask, cv2.convexHull(mouth), 255, lineType=cv2.LINE_AA)
+            mouth_opacity = mouth_mask.astype(np.float32)[..., None] / 255.0 * (0.58 * jaw_open)
+            cavity_color = np.array((38.0, 12.0, 18.0), dtype=np.float32)
+            canvas = canvas * (1.0 - mouth_opacity) + cavity_color * mouth_opacity
 
         oval = target_all[np.asarray(_FACE_OVAL)]
         visible_oval = oval[

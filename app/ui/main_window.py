@@ -6,6 +6,7 @@ import logging
 import time
 from collections.abc import Callable
 from concurrent.futures import Future, ThreadPoolExecutor
+from math import hypot
 
 from PySide6.QtCore import QEvent, QPointF, QRectF, Qt, QTimer
 from PySide6.QtGui import (
@@ -60,6 +61,8 @@ from app.reference import (
 from app.reference.protocol import ReferenceSelector
 from app.rendering import GeometricFaceRenderer
 from app.rendering.protocol import FaceRenderer
+from app.stabilization import TemporalStabilizer
+from app.stabilization.protocol import Stabilizer
 from app.tracking import MediaPipeFaceTracker
 from app.tracking.protocol import FaceTracker
 from app.ui.reference_dialog import ReferenceEnrollmentDialog
@@ -75,6 +78,7 @@ class MainWindow(QMainWindow):
         reference_selector: ReferenceSelector | None = None,
         face_renderer_factory: Callable[[], FaceRenderer] | None = None,
         compositor: Compositor | None = None,
+        stabilizer: Stabilizer | None = None,
     ) -> None:
         super().__init__()
         self._config = config
@@ -83,13 +87,16 @@ class MainWindow(QMainWindow):
         self._reference_selector = reference_selector or PoseSpaceReferenceSelector()
         self._renderer = (face_renderer_factory or GeometricFaceRenderer)()
         self._compositor = compositor or AlphaFaceCompositor()
+        self._stabilizer = stabilizer or TemporalStabilizer()
         self._devices: tuple[CameraDevice, ...] = ()
         self._capturing = False
         self._opening = False
         self._last_image: QImage | None = None
         self._last_processed_image: QImage | None = None
         self._last_face_state: FaceState | None = None
+        self._last_raw_face_state: FaceState | None = None
         self._last_reference_weights: tuple[ReferenceWeight, ...] = ()
+        self._current_smoothing_ms = 0.0
         self._pending_tracking_frame: tuple[VideoFrame, QImage, int] | None = None
         self._tracking_drops = 0
         self._tracking_failed = False
@@ -414,6 +421,13 @@ class MainWindow(QMainWindow):
         )
         self.preview_mode_selector.currentIndexChanged.connect(self._preview_mode_changed)
         source_layout.addWidget(self.preview_mode_selector)
+        self.smoothing_toggle = QCheckBox("Temporal smoothing")
+        self.smoothing_toggle.setChecked(True)
+        self.smoothing_toggle.setToolTip(
+            "Smooths motion, expressions, and reference weights. Disable for comparison."
+        )
+        self.smoothing_toggle.toggled.connect(self._smoothing_toggled)
+        source_layout.addWidget(self.smoothing_toggle)
         self.reference_library_card = QGroupBox("Reference library")
         self.reference_library_card.setSizePolicy(
             QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Maximum
@@ -464,7 +478,7 @@ class MainWindow(QMainWindow):
 
         self.diagnostics_card = QGroupBox("Live diagnostics")
         self.diagnostics_card.setObjectName("metricsCard")
-        self.diagnostics_card.setMinimumHeight(485)
+        self.diagnostics_card.setMinimumHeight(560)
         metrics_layout = QGridLayout(self.diagnostics_card)
         metrics_layout.setContentsMargins(18, 22, 18, 18)
         metrics_layout.setHorizontalSpacing(18)
@@ -489,6 +503,13 @@ class MainWindow(QMainWindow):
         self.mouth_activity_label.setObjectName("metricValue")
         self.tracking_latency_label = QLabel("—")
         self.tracking_latency_label.setObjectName("metricValue")
+        self.smoothing_state_label = QLabel("On")
+        self.smoothing_state_label.setObjectName("stateValue")
+        self.smoothing_state_label.setProperty("state", "running")
+        self.smoothing_latency_label = QLabel("—")
+        self.smoothing_latency_label.setObjectName("metricValue")
+        self.smoothing_correction_label = QLabel("—")
+        self.smoothing_correction_label.setObjectName("metricValue")
         self.rendering_state_label = QLabel("Idle")
         self.rendering_state_label.setObjectName("stateValue")
         self.rendering_state_label.setProperty("state", "idle")
@@ -512,6 +533,9 @@ class MainWindow(QMainWindow):
             ("Eye closure L · R", self.eye_closure_label),
             ("Mouth activity", self.mouth_activity_label),
             ("Tracking latency", self.tracking_latency_label),
+            ("Temporal smoothing", self.smoothing_state_label),
+            ("Smoothing latency", self.smoothing_latency_label),
+            ("Motion correction", self.smoothing_correction_label),
             ("Face rendering", self.rendering_state_label),
             ("Rendering latency", self.rendering_latency_label),
             ("Compositing latency", self.compositing_latency_label),
@@ -553,7 +577,7 @@ class MainWindow(QMainWindow):
         weight_scroll.setWidget(self.reference_weight_view)
         selection_layout.addWidget(weight_scroll, 1)
 
-        footer = QLabel("Milestone 5 · Geometric face rendering and compositing")
+        footer = QLabel("Milestone 6 · Temporal stability and expression handling")
         footer.setObjectName("hint")
         self._shell_layout.addWidget(footer)
         self._apply_responsive_layout(self.width())
@@ -686,6 +710,7 @@ class MainWindow(QMainWindow):
         self._update_reference_summary()
 
     def _update_reference_summary(self) -> None:
+        self._stabilizer.reset()
         self._last_processed_image = None
         complete = self._reference_library.completed_required_count
         required = self._reference_library.required_count
@@ -719,8 +744,10 @@ class MainWindow(QMainWindow):
         self._rendering_failed = False
         self._pending_tracking_frame = None
         self._last_face_state = None
+        self._last_raw_face_state = None
         self._last_processed_image = None
         self._last_reference_weights = ()
+        self._stabilizer.reset()
         self.camera_selector.setEnabled(False)
         self.refresh_button.setEnabled(False)
         self.capture_button.setText("Opening…")
@@ -831,10 +858,12 @@ class MainWindow(QMainWindow):
         self._last_image = None
         self._last_processed_image = None
         self._last_face_state = None
+        self._last_raw_face_state = None
         self._last_reference_weights = ()
         self._pending_tracking_frame = None
         self._tracking_failed = False
         self._rendering_failed = False
+        self._stabilizer.reset()
         self._metrics.reset()
         self.camera_selector.setEnabled(bool(self._devices))
         self.refresh_button.setEnabled(True)
@@ -879,6 +908,7 @@ class MainWindow(QMainWindow):
             accepted = self._tracker.submit(frame)
         except StageError as exc:
             self._tracking_failed = True
+            self._stabilizer.reset()
             self._last_face_state = None
             self._last_image = image
             self._last_processed_image = None
@@ -921,11 +951,31 @@ class MainWindow(QMainWindow):
         frame, image, processing_started_ns = retained
         self._last_image = image
         self._last_processed_image = None
-        self._last_face_state = result.face
-        self._update_tracking_diagnostics(result)
-        if result.status is TrackingStatus.TRACKED:
+        raw_face = result.face
+        face = raw_face
+        held = False
+        self._current_smoothing_ms = 0.0
+        if self.smoothing_toggle.isChecked():
+            smoothing_started = time.perf_counter_ns()
+            try:
+                if result.status is TrackingStatus.TRACKED:
+                    face = self._stabilizer.update(result.face)
+                elif result.status is TrackingStatus.NO_FACE:
+                    face = self._stabilizer.coast(result.frame_id, result.timestamp_ns)
+                    held = face is not None
+                    if face is None:
+                        self._stabilizer.reset()
+            except StageError as exc:
+                self._logger.warning("Temporal smoothing reset after invalid input: %s", exc)
+                self._stabilizer.reset()
+                face = raw_face
+            self._current_smoothing_ms = (time.perf_counter_ns() - smoothing_started) / 1_000_000
+        self._last_raw_face_state = raw_face
+        self._last_face_state = face
+        self._update_tracking_diagnostics(result, face, held=held)
+        if face is not None:
             if self._preview_mode() == "processed":
-                self._process_frame(frame, result.face, processing_started_ns)
+                self._process_frame(frame, face, processing_started_ns)
             elif not self._rendering_failed:
                 self._set_rendering_state("Ready", "running")
                 self.rendering_latency_label.setText("—")
@@ -1039,6 +1089,21 @@ class MainWindow(QMainWindow):
                 self._set_rendering_state("Waiting for frame", "opening")
         self._render_last_image()
 
+    def _smoothing_toggled(self, enabled: bool) -> None:
+        self._stabilizer.reset()
+        self._last_reference_weights = ()
+        self._last_processed_image = None
+        self._set_smoothing_state("On" if enabled else "Off", "running" if enabled else "idle")
+        self.smoothing_latency_label.setText("—")
+        self.smoothing_correction_label.setText("—")
+        if self._capturing:
+            self.statusBar().showMessage(
+                "Temporal smoothing enabled."
+                if enabled
+                else "Temporal smoothing disabled for comparison."
+            )
+        self._render_last_image()
+
     def _draw_tracking_overlay(self, image: QImage, face: FaceState) -> None:
         mirrored = self.mirror_preview_toggle.isChecked()
 
@@ -1069,7 +1134,9 @@ class MainWindow(QMainWindow):
         self.capture_fps_label.setText("—" if fps is None else f"{fps:.1f}")
         self.preview_drops_label.setText(str(self._metrics.preview_drops))
 
-    def _update_tracking_diagnostics(self, result: TrackingResult) -> None:
+    def _update_tracking_diagnostics(
+        self, result: TrackingResult, face: FaceState | None, *, held: bool = False
+    ) -> None:
         self.tracking_latency_label.setText(
             "—" if result.latency_ms is None else f"{result.latency_ms:.1f} ms"
         )
@@ -1078,15 +1145,21 @@ class MainWindow(QMainWindow):
             self._set_tracking_state("Error", "error")
             self._clear_face_metrics()
             self._clear_reference_selection("Tracking unavailable")
+            self._stabilizer.reset()
             self.statusBar().showMessage(f"Face tracking stopped: {result.error}")
             return
-        if result.status is TrackingStatus.NO_FACE:
+        if face is None:
             self._set_tracking_state("No face", "no-face")
             self._clear_face_metrics()
             self._clear_reference_selection("No face tracked")
+            self.smoothing_correction_label.setText("—")
+            self.smoothing_latency_label.setText(
+                f"{self._current_smoothing_ms:.2f} ms" if self.smoothing_toggle.isChecked() else "—"
+            )
             return
-        face = result.face
-        self._set_tracking_state("Tracked", "running")
+        self._set_tracking_state(
+            "Held briefly" if held else "Tracked", "opening" if held else "running"
+        )
         self.tracking_confidence_label.setText(f"{face.tracking_confidence * 100:.0f}% derived")
         self.head_pose_label.setText(
             f"{face.pose.yaw:+.1f}° · {face.pose.pitch:+.1f}° · {face.pose.roll:+.1f}°"
@@ -1111,19 +1184,51 @@ class MainWindow(QMainWindow):
         self.mouth_activity_label.setText(
             "Unavailable" if jaw_open is None else f"{jaw_open * 100:.0f}% open"
         )
+        if held:
+            self.smoothing_correction_label.setText("Holding last face")
+        elif self.smoothing_toggle.isChecked() and result.face is not None:
+            translation = hypot(
+                result.face.center.x - face.center.x,
+                result.face.center.y - face.center.y,
+            )
+            pose_delta = max(
+                abs(result.face.pose.yaw - face.pose.yaw),
+                abs(result.face.pose.pitch - face.pose.pitch),
+                abs(result.face.pose.roll - face.pose.roll),
+            )
+            self.smoothing_correction_label.setText(f"{translation:.1f} px · {pose_delta:.1f}°")
+        else:
+            self.smoothing_correction_label.setText("—")
         self._update_reference_selection(face)
 
     def _update_reference_selection(self, face: FaceState) -> None:
         references = self._reference_library.references()
         if not references:
+            self.smoothing_latency_label.setText(
+                f"{self._current_smoothing_ms:.2f} ms" if self.smoothing_toggle.isChecked() else "—"
+            )
             self._clear_reference_selection("No enrolled references")
             return
         try:
             weights = self._reference_selector.select(face, references)
+            if self.smoothing_toggle.isChecked():
+                smoothing_started = time.perf_counter_ns()
+                weights = self._stabilizer.smooth_weights(weights, face.timestamp_ns)
+                self._current_smoothing_ms += (
+                    time.perf_counter_ns() - smoothing_started
+                ) / 1_000_000
         except ValueError as exc:
             self._logger.error("Reference selection failed: %s", exc)
             self._clear_reference_selection("Selection error")
             return
+        except StageError as exc:
+            self._logger.warning("Reference-weight smoothing reset: %s", exc)
+            self._stabilizer.reset()
+            self._clear_reference_selection("Smoothing reset")
+            return
+        self.smoothing_latency_label.setText(
+            f"{self._current_smoothing_ms:.2f} ms" if self.smoothing_toggle.isChecked() else "—"
+        )
         self._last_reference_weights = weights
         self.reference_weight_view.set_weights(weights)
         if not weights:
@@ -1157,6 +1262,12 @@ class MainWindow(QMainWindow):
         self._clear_face_metrics()
         self.tracking_latency_label.setText("—")
         self.tracking_drops_label.setText("0")
+        self._set_smoothing_state(
+            "On" if self.smoothing_toggle.isChecked() else "Off",
+            "running" if self.smoothing_toggle.isChecked() else "idle",
+        )
+        self.smoothing_latency_label.setText("—")
+        self.smoothing_correction_label.setText("—")
         self._set_rendering_state("Idle", "idle")
         self.rendering_latency_label.setText("—")
         self.compositing_latency_label.setText("—")
@@ -1178,6 +1289,12 @@ class MainWindow(QMainWindow):
         self.rendering_state_label.setProperty("state", state)
         self.rendering_state_label.style().unpolish(self.rendering_state_label)
         self.rendering_state_label.style().polish(self.rendering_state_label)
+
+    def _set_smoothing_state(self, text: str, state: str) -> None:
+        self.smoothing_state_label.setText(text)
+        self.smoothing_state_label.setProperty("state", state)
+        self.smoothing_state_label.style().unpolish(self.smoothing_state_label)
+        self.smoothing_state_label.style().polish(self.smoothing_state_label)
 
     def _set_capture_state(self, text: str, state: str) -> None:
         self.capture_state_label.setText(text)
