@@ -1,0 +1,17 @@
+# Example configuration. Missing keys use application defaults.
+# This file is loaded only when explicitly supplied with --config.
+[app]
+debug = false
+
+[video]
+width = 1280
+height = 720
+fps = 30
+
+[logging]
+level = "INFO"
+max_bytes = 2000000
+backup_count = 3
+# Default: %LOCALAPPDATA%/FaceLive/logs
+# Relative paths resolve from this TOML file's directory.
+# directory = "../logs"
