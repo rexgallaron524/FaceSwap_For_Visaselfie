@@ -1,1 +1,5 @@
-"""Camera input boundary; no device backend is initialized here."""
+"""Physical camera input boundary and adapters."""
+
+from app.camera.opencv_source import OpenCVCameraSource
+
+__all__ = ["OpenCVCameraSource"]

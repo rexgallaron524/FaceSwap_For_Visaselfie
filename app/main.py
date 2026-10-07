@@ -5,18 +5,22 @@ from __future__ import annotations
 import argparse
 import logging
 import sys
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 from pathlib import Path
 
 from PySide6.QtCore import QTimer
 from PySide6.QtWidgets import QApplication
 
+from app.camera.protocol import CameraSource
 from app.config import AppConfig, ConfigError, load_config
 from app.diagnostics.logging_setup import close_logging, configure_logging
 from app.ui.main_window import MainWindow
 
 
-def create_application(config: AppConfig) -> tuple[QApplication, MainWindow]:
+def create_application(
+    config: AppConfig,
+    camera_source_factory: Callable[[], CameraSource] | None = None,
+) -> tuple[QApplication, MainWindow]:
     """Create the shell without starting the event loop or opening any devices."""
     application = QApplication.instance()
     if application is None:
@@ -25,7 +29,12 @@ def create_application(config: AppConfig) -> tuple[QApplication, MainWindow]:
         raise RuntimeError("FaceLive requires a QApplication, not a QCoreApplication")
     application.setApplicationName("FaceLive")
     application.setOrganizationName("FaceLive")
-    return application, MainWindow(config)
+    window = (
+        MainWindow(config)
+        if camera_source_factory is None
+        else MainWindow(config, camera_source_factory)
+    )
+    return application, window
 
 
 def main(argv: Sequence[str] | None = None) -> int:
@@ -47,7 +56,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         logger.info("Starting FaceLive; logs: %s", log_path)
         application, window = create_application(config)
         window.show()
-        logger.info("Application shell ready; camera and output inactive")
+        logger.info("Application shell ready; camera preview available, processing inactive")
         if args.smoke_test:
             QTimer.singleShot(250, window.close)
         exit_code = application.exec()

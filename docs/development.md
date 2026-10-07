@@ -2,7 +2,7 @@
 
 ## Requirements
 
-- Windows 11 x64; no GPU or webcam needed for milestone 0.
+- Windows 11 x64; no GPU is needed. A webcam is needed only for live preview/benchmark.
 - Python 3.12 x64. `.python-version` and `requires-python` intentionally select this
   minor version until later dependencies have been validated.
 - Network access for initial dependency/runtime installation. Running the shell is local.
@@ -72,7 +72,7 @@ invalid types, nonpositive dimensions/FPS/log limits, and unreadable files fail 
 Only explicit configuration is loaded; no hidden environment-variable overrides exist
 except standard `LOCALAPPDATA` for the log location and Qt's own environment settings.
 Relative log paths resolve against the TOML file's parent. Video dimensions/FPS are
-future requested values, not a promise of camera negotiation support.
+camera requests; the app shows the actual negotiated frame size and device-reported FPS.
 
 Logs go to `%LOCALAPPDATA%\FaceLive\logs\facelive.log` by default, with three backups
 and a 2,000,000-byte rotation threshold. Without `LOCALAPPDATA`, the path is
@@ -92,21 +92,32 @@ log setup/CLI failure, 1 unexpected app failure.
 
 Tests run the actual Qt process in offscreen mode with a temporary log directory.
 They cover startup/clean shutdown, installed-package launch from another directory,
-inactive controls, configuration validation, and bounded/idempotent logging. No webcam,
-GPU, models, or recorded face data is needed. Python protocols are static contracts;
-backend conformance and numerical tests will arrive with actual implementations.
+camera abstraction behavior, RGB conversion, timestamps, disconnect/reconnect UI state,
+configuration validation, and bounded logging. Tests use generated NumPy frames, so no
+webcam, GPU, model, or recorded face data is needed.
+
+Run the optional physical-camera benchmark after closing other camera applications:
+
+```powershell
+.\.venv\Scripts\python.exe tools\benchmarks\camera_capture.py --seconds 8
+```
+
+Use `--device 1` for another enumerated physical camera. The tool reports negotiated
+format, measured capture FPS, polling throughput, and skipped frames. Camera setup may
+take a moment, but the app performs it away from the Qt GUI thread.
 
 Use `python -m ruff format .` to format code. The lint rules cover errors, imports,
 modern Python syntax, and common bug patterns. Test discovery is limited to `tests/`.
 
 ## Layout and workflow
 
-`app/main.py` owns startup; `app/ui/` owns Qt; pipeline records and sink protocol live
-in `app/pipeline/`. Each processing subsystem has a protocol module. `native/`,
+`app/main.py` owns startup; `app/ui/` owns Qt; `app/camera/opencv_source.py` confines
+OpenCV and Windows camera discovery; pipeline records and sink protocol live in
+`app/pipeline/`. Each processing subsystem has a protocol module. `native/`,
 `models/`, fixture assets, and tooling directories contain scope notes until their
 milestones begin. Read [architecture.md](architecture.md) before changing contracts.
 
 Inspect code before each milestone, state a plan, implement only that milestone,
 add applicable tests, run checks, update docs, and stop for the next instruction.
 The runtime must keep processing local. Do not add model or native camera packages
-until their dedicated milestones. No installer is produced in milestone 0.
+until their dedicated milestones. No installer is produced in milestone 1.

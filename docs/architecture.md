@@ -2,16 +2,16 @@
 
 ## Status and scope
 
-Milestone 0 implements the desktop shell, configuration, logging, and Python
-protocols/data contracts. Everything in the processing diagram below is planned,
-except the UI shell. Protocol definitions do not execute processing. Target platform:
-Windows 11 x64, initial input/output 1280×720 at 30 FPS. This is a target, not a
-measured capability of this milestone.
+Milestone 1 implements the desktop shell, configuration, logging, Python contracts,
+physical-camera enumeration/capture, live preview, and capture metrics. Tracking through
+virtual output in the diagram remains planned. Target platform: Windows 11 x64, initial
+input/output 1280×720 at 30 FPS. Camera capture has been measured on the development
+machine; processing and output performance have not.
 
-Python 3.12 is the initial tested minor version, pinned until the imaging/tracking
-dependency set is validated. PySide6 supplies the desktop UI. NumPy supplies common
-image types. OpenCV, MediaPipe, neural libraries, and native camera dependencies are
-deferred until their milestones. Runtime imports never open hardware.
+Python 3.12 is the tested minor version. PySide6 supplies the desktop UI, NumPy supplies
+common image types, and OpenCV with `cv2-enumerate-cameras` supplies the current Windows
+camera adapter. MediaPipe, neural libraries, and native output dependencies remain
+deferred. Importing modules never opens hardware.
 
 ## Intended pipeline
 
@@ -53,7 +53,8 @@ lifecycles. Do not feed the FaceLive output back into its own input.
 | `FrameSink` | `app/pipeline/protocol.py` | Accept completed frames without blocking or accumulating latency |
 
 These are structural `typing.Protocol` interfaces, not inheritance requirements or
-runtime validators. Implementations and boundary validation will accompany each stage.
+runtime validators. `OpenCVCameraSource` is the first implementation; other stage
+implementations and boundary validation will accompany their milestones.
 The data records are in `app/pipeline/types.py`. Qt, MediaPipe, OpenCV, and Windows
 objects must remain inside adapters. Stage failures use `StageError`; programming
 errors must be logged and handled at the orchestration boundary as processing failures.
@@ -65,6 +66,11 @@ errors must be logged and handled at the orchestration boundary as processing fa
 - Live images are unmirrored, C-contiguous NumPy `uint8` arrays, shape `(height,
   width, 3)`, RGB channel order. Camera adapters convert BGR; output adapters convert
   RGB to native formats. `FrameFormat` describes this fixed internal format.
+- FaceLive mirrors only its local preview by default, controlled by the **Mirror local
+  preview** toggle. This display transform operates on the UI-owned `QImage`; it never
+  changes the canonical `VideoFrame`. Tracking, rendering, compositing, and the future
+  virtual-camera sink consume unmirrored frames. Meeting applications may mirror their
+  own local self-view, while remote participants receive the unmirrored output.
 - Alpha masks are full-frame `float32` arrays `(height, width)`, finite in `[0, 1]`.
   The renderer outputs full-frame RGB plus alpha to avoid ambiguous crop transforms.
   Full-frame allocation cost is an intentional initial simplicity tradeoff; profile
@@ -106,9 +112,10 @@ errors must be logged and handled at the orchestration boundary as processing fa
 
 ### Scheduling and lifetime
 
-- Qt widgets and the event loop stay on the GUI thread. Future capture and processing
-  run outside it; signals deliver completed output to the UI. No processing workers
-  are created in milestone 0.
+- Qt widgets and the event loop stay on the GUI thread. Camera opening runs in a small
+  executor because device setup may block. The camera adapter owns a capture thread;
+  a 10 ms Qt timer polls its latest complete frame. The GUI copies RGB pixels into a
+  `QImage` before releasing the source snapshot. Future processing also runs outside Qt.
 - `CameraSource.read_latest`, `FaceTracker.submit/poll_latest`, and `FrameSink.publish`
   are nonblocking. Implementations use bounded storage and favor the newest complete
   frame. Resource setup/loading can block and belongs outside the GUI thread later.
@@ -130,7 +137,8 @@ Product decision: output a configured placeholder whenever a valid processed fra
 cannot be produced while replacement is enabled. Never automatically fall back to
 raw camera video or stale reference identity. The local UI shows the reason. A future
 explicit user action to disable replacement may enable raw passthrough; enabling
-passthrough and its visible state must be implemented together. Milestone 0 emits no video.
+passthrough and its visible state must be implemented together. Milestone 1 only previews
+the raw physical input locally and emits no virtual-camera video.
 
 | Event | Intended behavior |
 | --- | --- |
@@ -151,7 +159,11 @@ Final timeout thresholds and reconnect UX need measurement and product review.
 
 Instrument capture, tracking, selection, rendering, compositing, and transfer separately.
 Measure end-to-end age from capture timestamp, processed/output FPS, and dropped frames
-by stage. The shell uses dashes rather than fabricated performance numbers.
+by stage. The Milestone 1 shell measures capture FPS from frame IDs and monotonic capture
+timestamps, so UI polling skips do not reduce the estimate; skipped preview frames are
+reported separately. On the development Integrated Webcam, an eight-second standalone
+run negotiated 1280×720/30 and observed 27.55 capture FPS with zero polling skips. A
+live Qt preview check observed 25.7 FPS. These results are device and lighting dependent.
 
 After the preview pipeline is stable, implement a C++ Media Foundation custom Media
 Source registered using `MFCreateVirtualCamera`, based on Microsoft's Windows Camera
@@ -168,5 +180,5 @@ and ABI details require their own milestone. `FrameSink` is a Python abstraction
 - [uv Python provisioning](https://docs.astral.sh/uv/guides/install-python/)
 
 Neural refinement is deferred until deterministic geometry has been evaluated. The
-next proposed milestone is physical camera input and bounded preview with capture
-diagnostics; it requires an explicit user instruction.
+next proposed milestone is live face tracking with backend-independent `FaceState`
+output and diagnostics; it requires an explicit user instruction.

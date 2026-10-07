@@ -5,6 +5,7 @@ from __future__ import annotations
 from collections.abc import Mapping
 from dataclasses import dataclass, field
 from enum import Enum
+from math import isfinite
 
 import numpy as np
 from numpy.typing import NDArray
@@ -18,6 +19,19 @@ class FrameFormat:
     width: int
     height: int
     fps: float
+
+    def __post_init__(self) -> None:
+        if type(self.width) is not int or self.width <= 0:
+            raise ValueError("Frame width must be a positive integer")
+        if type(self.height) is not int or self.height <= 0:
+            raise ValueError("Frame height must be a positive integer")
+        if (
+            isinstance(self.fps, bool)
+            or not isinstance(self.fps, (int, float))
+            or not isfinite(self.fps)
+            or self.fps <= 0
+        ):
+            raise ValueError("Frame FPS must be positive")
 
 
 @dataclass(frozen=True, slots=True)

@@ -4,10 +4,11 @@ Local Windows 11 x64 desktop application for a consenting user's prepared refere
 appearance. The intended pipeline preserves the live body and surroundings while
 replacing only the facial region.
 
-**Current milestone: 0 — architecture and repository bootstrap.** The app launches
-a PySide6 shell with an idle preview, validated configuration, and rotating logs.
-Camera, reference, replacement, and virtual-camera controls are deliberately inactive.
-There is no camera capture, face processing, model download, or video output yet.
+**Current milestone: 1 — webcam capture and live preview.** The app enumerates named
+physical cameras, captures timestamped RGB frames on a worker, displays a live PySide6
+preview with an optional mirror-style self-view, and reports measured capture FPS.
+Reference, replacement, and virtual-camera controls remain inactive. There is no face
+processing, model download, or video output yet.
 
 ## Quick start (PowerShell)
 
@@ -35,6 +36,7 @@ uv run --locked facelive --smoke-test
 - [Environment, configuration, logging, and validation](docs/development.md)
 - [Reference acquisition plan](docs/reference_capture.md)
 - [Milestone 0 change inventory and validation](docs/milestone_0.md)
+- [Milestone 1 change inventory, tests, and observed performance](docs/milestone_1.md)
 
 All processing is intended to stay local. Future functionality is for the user's
 own face or explicitly consenting subjects. Identity verification, liveness/proctoring

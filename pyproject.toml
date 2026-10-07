@@ -5,11 +5,13 @@ build-backend = "hatchling.build"
 [project]
 name = "facelive"
 version = "0.0.1"
-description = "Local reference-face desktop application — milestone 0 shell"
+description = "Local reference-face desktop application"
 readme = "README.md"
 requires-python = ">=3.12,<3.13"
 dependencies = [
+    "cv2-enumerate-cameras>=1.2,<2",
     "numpy>=2.2,<3",
+    "opencv-python>=4.11,<5",
     "PySide6>=6.8,<7",
 ]
 
