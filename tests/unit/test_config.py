@@ -2,12 +2,13 @@ from pathlib import Path
 
 import pytest
 
-from app.config import ConfigError, load_config
+from app.config import ConfigError, default_app_data_directory, load_config
 
 
 def test_defaults_follow_local_app_data(monkeypatch, tmp_path):
     monkeypatch.setenv("LOCALAPPDATA", str(tmp_path))
     config = load_config()
+    assert default_app_data_directory() == tmp_path / "FaceLive"
     assert (config.video.width, config.video.height, config.video.fps) == (1280, 720, 30)
     assert config.logging.directory == tmp_path / "FaceLive" / "logs"
     assert config.debug is False

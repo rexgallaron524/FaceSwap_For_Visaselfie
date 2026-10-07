@@ -27,7 +27,7 @@ from app.camera.metrics import CaptureMetrics
 from app.camera.protocol import CameraSource
 from app.config import AppConfig
 from app.pipeline.types import CameraDevice, FrameFormat, StageError, VideoFrame
-from app.reference import ReferenceLibraryStore
+from app.reference import ReferenceLibrarySession, ReferenceLibraryStore
 from app.ui.reference_dialog import ReferenceEnrollmentDialog
 
 
@@ -45,8 +45,16 @@ class MainWindow(QMainWindow):
         self._opening = False
         self._last_image: QImage | None = None
         self._metrics = CaptureMetrics()
-        self._reference_library = ReferenceLibraryStore()
         self._logger = logging.getLogger("facelive.ui")
+        self._reference_library = ReferenceLibraryStore()
+        self._reference_session = ReferenceLibrarySession(self._reference_library)
+        restored = self._reference_session.restore()
+        if restored:
+            self._logger.info(
+                "Restored reference library from %s", self._reference_session.active_path
+            )
+        elif self._reference_session.last_error:
+            self._logger.warning(self._reference_session.last_error)
         self._camera_executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="camera-open")
         self._open_future: Future[FrameFormat] | None = None
 
@@ -131,6 +139,11 @@ class MainWindow(QMainWindow):
                 border-color: #76b6ff;
             }
             QPushButton#primaryButton:pressed { background: #0f63c6; }
+            QPushButton#primaryButton:disabled {
+                color: #8996a5;
+                background: #1a222c;
+                border-color: #313d4b;
+            }
             QPushButton:disabled {
                 color: #8996a5;
                 background: #1a222c;
@@ -231,6 +244,8 @@ class MainWindow(QMainWindow):
             QLabel#referenceStatus[valid="true"] { color: #5ee6a8; }
             QLabel#referenceSummary { color: #f2bb60; font-weight: 700; }
             QLabel#referenceSummary[complete="true"] { color: #5ee6a8; }
+            QLabel#librarySaveState { color: #f2bb60; }
+            QLabel#librarySaveState[saved="true"] { color: #5ee6a8; }
         """)
         self._build_ui()
 
@@ -425,7 +440,7 @@ class MainWindow(QMainWindow):
             self.start_capture()
 
     def open_reference_enrollment(self) -> None:
-        dialog = ReferenceEnrollmentDialog(self._reference_library, self)
+        dialog = ReferenceEnrollmentDialog(self._reference_session, self)
         dialog.library_changed.connect(self._update_reference_summary)
         dialog.exec()
         self._update_reference_summary()
@@ -594,5 +609,9 @@ class MainWindow(QMainWindow):
         self._metrics_timer.stop()
         self._camera_executor.shutdown(wait=True, cancel_futures=True)
         self._source.close()
-        self._reference_library.close()
+        try:
+            self._reference_session.flush()
+        except StageError as exc:
+            self._logger.error("Could not flush reference library at shutdown: %s", exc)
+        self._reference_session.close()
         event.accept()

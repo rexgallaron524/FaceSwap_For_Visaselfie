@@ -86,7 +86,8 @@ def test_failed_load_clears_existing_subject_and_detects_corruption(tmp_path):
     store.add_reference("front-neutral", tmp_path / "front.jpg")
     path = tmp_path / "library.json"
     store.save(path)
-    asset = tmp_path / "library_assets" / "front-neutral.png"
+    manifest = parse_manifest(path.read_text(encoding="utf-8"))
+    asset = tmp_path / manifest["references"][0]["metadata"]["asset"]
     asset.write_bytes(asset.read_bytes() + b"corrupt")
 
     with pytest.raises(StageError, match="checksum failed"):
@@ -100,7 +101,8 @@ def test_saving_after_removal_deletes_the_cached_asset(tmp_path):
     store.add_reference("front-neutral", tmp_path / "front.jpg")
     path = tmp_path / "library.json"
     store.save(path)
-    asset = tmp_path / "library_assets" / "front-neutral.png"
+    manifest = parse_manifest(path.read_text(encoding="utf-8"))
+    asset = tmp_path / manifest["references"][0]["metadata"]["asset"]
     assert asset.is_file()
 
     store.add_reference("front-smile", tmp_path / "smile.jpg")

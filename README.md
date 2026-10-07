@@ -8,6 +8,7 @@ replacing only the facial region.
 physical-camera frames, and its reference-library dialog enrolls the eight initial pose and
 expression images. Enrollment validates one usable face, aligns it to a normalized 512×512
 RGB image, records reusable landmarks and metadata, and saves a versioned library locally.
+Accepted changes save automatically, and the last active library is restored on startup.
 Face replacement and virtual-camera output remain inactive.
 
 ## Quick start (PowerShell)

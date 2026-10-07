@@ -13,9 +13,13 @@ class ConfigError(ValueError):
     """The supplied configuration cannot be used."""
 
 
-def default_log_directory() -> Path:
+def default_app_data_directory() -> Path:
     base = Path(os.environ.get("LOCALAPPDATA") or Path.home() / "AppData" / "Local")
-    return base / "FaceLive" / "logs"
+    return base / "FaceLive"
+
+
+def default_log_directory() -> Path:
+    return default_app_data_directory() / "logs"
 
 
 def _positive_integer(name: str, value: object) -> None:

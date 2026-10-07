@@ -114,7 +114,7 @@ while not window._capturing and time.monotonic() < deadline:
 assert window._capturing
 assert window.load_references.isEnabled()
 assert window.reference_summary_label.text() == 'Incomplete · 0 of 8 required'
-dialog = ReferenceEnrollmentDialog(window._reference_library, window)
+dialog = ReferenceEnrollmentDialog(window._reference_session, window)
 dialog.show()
 application.processEvents()
 assert len(dialog._cards) == 8
@@ -124,6 +124,8 @@ assert set(dialog._cards) == {
 }
 assert dialog.summary.text() == '0 of 8 required references valid'
 assert not dialog.save_button.isEnabled()
+assert dialog.save_button.text() == 'Save as…'
+assert dialog.location.text().startswith('Will save automatically to ')
 dialog.close()
 assert not window.replacement_toggle.isEnabled()
 assert not window.replacement_toggle.isChecked()
@@ -136,7 +138,11 @@ assert source.closed
     result = subprocess.run(
         [sys.executable, "-c", script],
         cwd=Path(tmp_path),
-        env={**os.environ, "QT_QPA_PLATFORM": "offscreen"},
+        env={
+            **os.environ,
+            "QT_QPA_PLATFORM": "offscreen",
+            "LOCALAPPDATA": str(tmp_path),
+        },
         capture_output=True,
         text=True,
         timeout=30,

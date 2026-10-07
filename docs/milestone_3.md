@@ -15,6 +15,8 @@
   changing the `ReferenceLibrary` protocol or prepared-reference pipeline record.
 - A PySide6 enrollment dialog with per-slot instructions, image selection/removal,
   normalized thumbnails, validity status, completion count, and save/load actions.
+- Automatic saving after each accepted edit, startup restoration of the last active
+  library, a per-user default location, **Save as…**, and visible storage status.
 - Capture guidance, model provenance, architecture notes, and locked dependencies.
 
 Face replacement, live face tracking, reference selection, compositing, and virtual-camera
@@ -29,7 +31,7 @@ extension, application startup, and the eight-card enrollment dialog.
 
 ```text
 python -m pytest -q
-48 passed
+52 passed
 
 python -m ruff check .
 All checks passed!
@@ -53,11 +55,13 @@ user chooses an image and is not part of the live frame loop.
 ```text
 .gitignore
 README.md
+app/config.py
 app/reference/__init__.py
 app/reference/detector.py
 app/reference/library.py
 app/reference/model.py
 app/reference/preprocessor.py
+app/reference/session.py
 app/ui/main_window.py
 app/ui/reference_dialog.py
 docs/architecture.md
@@ -71,6 +75,7 @@ pyproject.toml
 tests/integration/test_startup.py
 tests/unit/test_reference_library.py
 tests/unit/test_reference_preprocessor.py
+tests/unit/test_reference_session.py
 uv.lock
 ```
 

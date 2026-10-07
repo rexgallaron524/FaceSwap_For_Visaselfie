@@ -24,8 +24,8 @@ from PySide6.QtWidgets import (
 )
 
 from app.pipeline.types import StageError
-from app.reference.library import ReferenceLibraryStore
 from app.reference.model import ProcessedReference, ReferenceSlot
+from app.reference.session import ReferenceLibrarySession, ReferencePersistenceError
 
 
 class ReferenceCard(QFrame):
@@ -120,9 +120,10 @@ class ReferenceCard(QFrame):
 class ReferenceEnrollmentDialog(QDialog):
     library_changed = Signal()
 
-    def __init__(self, library: ReferenceLibraryStore, parent=None) -> None:
+    def __init__(self, session: ReferenceLibrarySession, parent=None) -> None:
         super().__init__(parent)
-        self._library = library
+        self._session = session
+        self._library = session.library
         self._cards: dict[str, ReferenceCard] = {}
         self.setWindowTitle("Reference Library — FaceLive")
         self.resize(1120, 760)
@@ -146,7 +147,7 @@ class ReferenceEnrollmentDialog(QDialog):
         self.load_button = QPushButton("Load library…")
         self.load_button.clicked.connect(self._load_library)
         toolbar.addWidget(self.load_button)
-        self.save_button = QPushButton("Save library…")
+        self.save_button = QPushButton("Save as…")
         self.save_button.setObjectName("primaryButton")
         self.save_button.clicked.connect(self._save_library)
         toolbar.addWidget(self.save_button)
@@ -163,8 +164,8 @@ class ReferenceEnrollmentDialog(QDialog):
         self._rebuild_cards()
 
         footer = QHBoxLayout()
-        self.location = QLabel("Unsaved library")
-        self.location.setObjectName("dialogDescription")
+        self.location = QLabel()
+        self.location.setObjectName("librarySaveState")
         self.location.setWordWrap(True)
         footer.addWidget(self.location, 1)
         close_button = QPushButton("Close")
@@ -198,8 +199,20 @@ class ReferenceEnrollmentDialog(QDialog):
         self.summary.style().unpolish(self.summary)
         self.summary.style().polish(self.summary)
         self.save_button.setEnabled(self._library.valid_count > 0)
-        path = self._library.manifest_path
-        self.location.setText(str(path) if path is not None else "Unsaved library")
+        if self._session.last_error:
+            self.location.setText(f"Storage error · {self._session.last_error}")
+            self.location.setProperty("saved", False)
+        elif self._session.dirty:
+            self.location.setText(f"Unsaved changes · {self._session.active_path}")
+            self.location.setProperty("saved", False)
+        elif self._session.is_saved:
+            self.location.setText(f"Saved automatically · {self._session.active_path}")
+            self.location.setProperty("saved", True)
+        else:
+            self.location.setText(f"Will save automatically to {self._session.active_path}")
+            self.location.setProperty("saved", False)
+        self.location.style().unpolish(self.location)
+        self.location.style().polish(self.location)
 
     def _choose_image(self, slot_id: str) -> None:
         filename, _ = QFileDialog.getOpenFileName(
@@ -215,7 +228,9 @@ class ReferenceEnrollmentDialog(QDialog):
         QApplication.setOverrideCursor(Qt.CursorShape.WaitCursor)
         QApplication.processEvents()
         try:
-            self._library.add_reference(slot_id, Path(filename))
+            self._session.add_reference(slot_id, Path(filename))
+        except ReferencePersistenceError as exc:
+            QMessageBox.warning(self, "Reference added but not saved", str(exc))
         except StageError as exc:
             QMessageBox.warning(self, "Reference rejected", str(exc))
         finally:
@@ -225,20 +240,22 @@ class ReferenceEnrollmentDialog(QDialog):
         self.library_changed.emit()
 
     def _remove_reference(self, slot_id: str) -> None:
-        self._library.remove_reference(slot_id)
+        try:
+            self._session.remove_reference(slot_id)
+        except ReferencePersistenceError as exc:
+            QMessageBox.warning(self, "Reference removed but not saved", str(exc))
         self.refresh()
         self.library_changed.emit()
 
     def _save_library(self) -> None:
-        current = self._library.manifest_path
-        initial = str(current) if current is not None else "facelive-references.json"
+        initial = str(self._session.active_path)
         filename, _ = QFileDialog.getSaveFileName(
             self, "Save reference library", initial, "FaceLive library (*.json)"
         )
         if not filename:
             return
         try:
-            self._library.save(Path(filename))
+            self._session.save_as(Path(filename))
         except StageError as exc:
             QMessageBox.critical(self, "Could not save library", str(exc))
             return
@@ -252,7 +269,13 @@ class ReferenceEnrollmentDialog(QDialog):
         if not filename:
             return
         try:
-            self._library.load(Path(filename))
+            self._session.load(Path(filename))
+        except ReferencePersistenceError as exc:
+            QMessageBox.warning(self, "Library loaded but not remembered", str(exc))
+            self._rebuild_cards()
+            self.refresh()
+            self.library_changed.emit()
+            return
         except StageError as exc:
             QMessageBox.critical(self, "Could not load library", str(exc))
             self._rebuild_cards()

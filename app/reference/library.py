@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import logging
 import os
 from collections.abc import Mapping
 from dataclasses import replace
@@ -27,6 +28,8 @@ from app.reference.model import (
     ReferenceSlot,
 )
 from app.reference.preprocessor import ReferencePreprocessor
+
+_LOGGER = logging.getLogger("facelive.reference")
 
 
 def serialize_manifest(value: Mapping[str, Any]) -> str:
@@ -153,8 +156,6 @@ class ReferenceLibraryStore:
         self._manifest_path = None
 
     def save(self, path: Path) -> None:
-        if not self._entries:
-            raise StageError("Add at least one valid reference before saving")
         path = path.resolve()
         if path.suffix.casefold() != ".json":
             path = path.with_suffix(".json")
@@ -167,32 +168,24 @@ class ReferenceLibraryStore:
 
         references: list[dict[str, Any]] = []
         updated_entries: dict[str, ProcessedReference] = {}
+        active_assets: set[Path] = set()
         for slot in self._slots:
             entry = self._entries.get(slot.slot_id)
-            asset_file = asset_directory / f"{slot.slot_id}.png"
             if entry is None:
-                try:
-                    asset_file.unlink(missing_ok=True)
-                except OSError as exc:
-                    raise StageError(
-                        f"Could not remove cached reference {slot.label}: {exc}"
-                    ) from exc
                 continue
             ok, encoded = cv2.imencode(".png", cv2.cvtColor(entry.rgb, cv2.COLOR_RGB2BGR))
             if not ok:
                 raise StageError(f"Could not encode normalized reference: {slot.label}")
             asset_bytes = encoded.tobytes()
-            try:
-                asset_file.write_bytes(asset_bytes)
-            except OSError as exc:
-                raise StageError(
-                    f"Could not save normalized reference {slot.label}: {exc}"
-                ) from exc
+            asset_sha256 = hashlib.sha256(asset_bytes).hexdigest()
+            asset_file = asset_directory / f"{slot.slot_id}-{asset_sha256}.png"
+            active_assets.add(asset_file)
+            self._write_asset(asset_file, asset_bytes, asset_sha256, slot.label)
             relative_asset = asset_file.relative_to(path.parent).as_posix()
             metadata = replace(
                 entry.metadata,
                 asset_path=relative_asset,
-                asset_sha256=hashlib.sha256(asset_bytes).hexdigest(),
+                asset_sha256=asset_sha256,
             )
             updated = ProcessedReference(metadata, entry.rgb, entry.landmarks)
             updated_entries[slot.slot_id] = updated
@@ -224,6 +217,36 @@ class ReferenceLibraryStore:
             raise StageError(f"Could not save reference manifest: {exc}") from exc
         self._entries = updated_entries
         self._manifest_path = path
+        self._remove_stale_assets(asset_directory, active_assets)
+
+    @staticmethod
+    def _write_asset(
+        asset_file: Path, asset_bytes: bytes, asset_sha256: str, slot_label: str
+    ) -> None:
+        temporary = asset_file.with_name(f".{asset_file.name}.{os.getpid()}.tmp")
+        try:
+            if asset_file.is_file():
+                existing_sha256 = hashlib.sha256(asset_file.read_bytes()).hexdigest()
+                if existing_sha256 == asset_sha256:
+                    return
+            temporary.write_bytes(asset_bytes)
+            temporary.replace(asset_file)
+        except OSError as exc:
+            try:
+                temporary.unlink(missing_ok=True)
+            except OSError:
+                pass
+            raise StageError(f"Could not save normalized reference {slot_label}: {exc}") from exc
+
+    @staticmethod
+    def _remove_stale_assets(asset_directory: Path, active_assets: set[Path]) -> None:
+        for asset_file in asset_directory.glob("*.png"):
+            if asset_file in active_assets:
+                continue
+            try:
+                asset_file.unlink()
+            except OSError as exc:
+                _LOGGER.warning("Could not remove stale reference asset %s: %s", asset_file, exc)
 
     def load(self, path: Path) -> None:
         """Load cached normalized assets; failed loads always leave the library empty."""

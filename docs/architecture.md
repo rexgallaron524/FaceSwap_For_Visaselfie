@@ -95,12 +95,21 @@ errors must be logged and handled at the orchestration boundary as processing fa
   definitions, pose/expression labels, source-image metadata, quality measurements,
   blendshapes, normalized landmarks, and checksums. This explicit slot list permits more
   poses and optional expression variants without changing the pipeline types.
-- Normalized PNG assets live beside the manifest in `<manifest-name>_assets`. Original
-  source images are not copied into the library. Paths are resolved within the manifest
-  directory and asset checksums are verified before decoding.
+- Content-addressed normalized PNG assets live beside the manifest in
+  `<manifest-name>_assets`. Original source images are not copied into the library. Paths
+  are resolved within the manifest directory and asset checksums are verified before
+  decoding. New assets are committed before the manifest is atomically replaced; stale
+  assets are removed only after that replacement.
 - A failed load clears the current library. Incompatible schema, normalization dimensions,
   landmark schema, duplicate slot IDs, missing assets, invalid landmarks, and checksum
   failures are rejected rather than partially loaded.
+- `ReferenceLibrarySession` owns the active manifest. It saves each successful enrollment
+  edit immediately, records the active absolute path in an atomic per-user state file, and
+  restores that library at startup. The default location is the application's local data
+  directory. **Load library…** and **Save as…** switch the active manifest.
+- If automatic saving fails, the in-memory edit remains marked dirty and the enrollment UI
+  shows the storage error. Shutdown retries dirty writes. The manifest itself is replaced
+  atomically after its normalized assets are written.
 - The source filename and SHA-256 digest identify enrollment input for diagnostics. They
   are metadata, not proof of consent or identity. Library files contain biometric data and
   should remain under the user's control.

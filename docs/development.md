@@ -76,10 +76,13 @@ Relative log paths resolve against the TOML file's parent. Video dimensions/FPS 
 camera requests; the app shows the actual negotiated frame size and device-reported FPS.
 
 Select **Manage references…** to open enrollment. Loading an image initializes MediaPipe
-Face Landmarker lazily on the first request. Saving produces a manifest and asset directory
-at the selected location; both are required when moving a library. Personal libraries and
-source images belong in ignored `references/` or outside the repository. See the
-[capture guide](reference_capture.md) for required poses and image conditions.
+Face Landmarker lazily on the first request. Accepted additions and removals are saved
+immediately. The initial active manifest is
+`%LOCALAPPDATA%\FaceLive\references\default.json`; `active-library.json` remembers a
+library selected through **Load library…** or **Save as…**. The active library is restored
+at the next startup. A manifest and its `<name>_assets` directory are both required when
+moving a library. See the [capture guide](reference_capture.md) for required poses and image
+conditions.
 
 Logs go to `%LOCALAPPDATA%\FaceLive\logs\facelive.log` by default, with three backups
 and a 2,000,000-byte rotation threshold. Without `LOCALAPPDATA`, the path is
@@ -101,9 +104,10 @@ Tests run the actual Qt process in offscreen mode with a temporary log directory
 They cover startup/clean shutdown, installed-package launch from another directory,
 camera abstraction behavior, RGB conversion, timestamps, disconnect/reconnect UI state,
 configuration validation, bounded logging, reference validation, deterministic manifest
-serialization, checksum rejection, extensible slots, reference lookup, and the enrollment
-dialog shell. Tests use generated NumPy frames and a fake detector, so no webcam, GPU, or
-recorded face data is needed.
+serialization, checksum rejection, extensible slots, reference lookup, automatic saving,
+restart restoration, active-library switching, and the enrollment dialog shell. Tests use
+generated NumPy frames and a fake detector, so no webcam, GPU, or recorded face data is
+needed.
 
 Run the optional physical-camera benchmark after closing other camera applications:
 

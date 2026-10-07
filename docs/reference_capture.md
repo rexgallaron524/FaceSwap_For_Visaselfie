@@ -37,16 +37,25 @@ milestone.
 
 1. Start FaceLive and select **Manage references…**.
 2. Choose an image for each card. A valid image immediately shows its normalized thumbnail.
-3. Replace or remove any image as needed. Rejected images display a specific reason.
-4. Select **Save library…**. FaceLive writes a JSON manifest and a neighboring
-   `<name>_assets` directory containing the normalized PNG files.
-5. Use **Load library…** later to restore the validated cache without running face detection
-   again.
+3. FaceLive immediately saves every accepted addition or removal. The first library uses
+   `%LOCALAPPDATA%\FaceLive\references\default.json` and a neighboring `default_assets`
+   directory.
+4. Close and restart normally. FaceLive restores the last active library and its thumbnails
+   automatically.
+5. Use **Save as…** to create and switch to a named library. Later edits automatically save
+   to that library.
+6. Use **Load library…** to switch to another saved JSON manifest. FaceLive remembers the
+   selection for the next startup.
+
+The status at the bottom reports **Saved automatically**, **Unsaved changes**, or a storage
+error and shows the active manifest path. If automatic saving fails, the accepted change
+remains in memory so **Save as…** can preserve it elsewhere.
 
 Source images are read during enrollment and are not copied into the saved library. The
 library contains normalized face imagery, landmark geometry, blendshape values, and source
-file hashes. Treat the manifest and asset directory as sensitive biometric data, keep both
-together, and store or share them only with the subject's consent.
+file hashes. Keep a manifest and its matching `<name>_assets` directory together when moving
+or backing up a library. Treat both as sensitive biometric data and store or share them only
+with the subject's consent.
 
 ## Validation and preprocessing
 
