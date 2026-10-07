@@ -2,12 +2,12 @@
 
 ## Status and scope
 
-Milestones 2 and 3 implement the desktop shell, physical-camera preview, asynchronous
-single-face tracking, diagnostics, and local reference enrollment. Tracking produces the
-backend-independent `FaceState`; the reference subsystem validates, aligns, normalizes,
-caches, saves, and loads the eight initial images. Stabilization through virtual output in
-the diagram remains planned. Target platform: Windows 11 x64, initial input/output
-1280×720 at 30 FPS.
+Milestones 2 through 4 implement the desktop shell, physical-camera preview, asynchronous
+single-face tracking, diagnostics, local reference enrollment, and continuous pose-space
+reference selection. Tracking produces the backend-independent `FaceState`; the reference
+subsystem validates, aligns, normalizes, caches, saves, loads, and weights the eight initial
+images. Stabilization through virtual output in the diagram remains planned. Target
+platform: Windows 11 x64, initial input/output 1280×720 at 30 FPS.
 
 Python 3.12 is the tested minor version. PySide6 supplies the desktop UI, NumPy supplies
 common image types, and OpenCV with `cv2-enumerate-cameras` supplies the current Windows
@@ -21,8 +21,9 @@ deferred. Importing modules never opens hardware or initializes either landmarke
 flowchart LR
     Camera[Physical CameraSource] --> Frame[Bounded frame retention]
     Frame --> Tracker[Async FaceTracker]
-    Tracker --> Stabilizer
-    Stabilizer --> Selector[ReferenceSelector]
+    Tracker -->|current FaceState| Selector[ReferenceSelector]
+    Tracker -. future smoothing .-> Stabilizer
+    Stabilizer -. future stabilized state .-> Selector
     Library[Prepared ReferenceLibrary] --> Selector
     Library --> Renderer[FaceRenderer]
     Selector --> Renderer
@@ -57,9 +58,9 @@ lifecycles. Do not feed the FaceLive output back into its own input.
 These are structural `typing.Protocol` interfaces, not inheritance requirements or
 runtime validators. `OpenCVCameraSource` implements camera input and
 `MediaPipeFaceTracker` implements bounded live tracking. `ReferenceLibraryStore`
-implements the stable `ReferenceLibrary` surface plus enrollment,
-persistence, and slot-management operations. Other stages and their boundary validation
-will accompany their milestones.
+implements the stable `ReferenceLibrary` surface plus enrollment, persistence, and
+slot-management operations. `PoseSpaceReferenceSelector` implements continuous selection.
+Other stages and their boundary validation will accompany their milestones.
 
 The data records are in `app/pipeline/types.py`. Qt, MediaPipe, OpenCV, and Windows
 objects must remain inside adapters. Stage failures use `StageError`; programming
@@ -152,6 +153,22 @@ errors must be logged and handled at the orchestration boundary as processing fa
   dimension of 18% of the frame. It is not a probability.
 - Selection weights are finite, nonnegative, reference existing IDs, and sum to 1 for
   a nonempty result. Empty selection means no usable reference/unsupported pose.
+- The current pose map groups prepared references by their declared `(yaw, pitch)` values.
+  On the zero-pitch axis, adjacent yaw anchors interpolate linearly and values beyond the
+  outer anchors clamp to the nearest available pose. This makes front/right-20/right-40 and
+  front/left-20/left-40 transitions continuous without hard switching.
+- Pitch remains a separate sparse axis for the initial cross-shaped capture set. Absolute
+  pitch continuously transfers weight from the current yaw interpolation toward available
+  up or down anchors, reaching full pitch influence at that side's outer reference. This
+  avoids claiming unavailable combined yaw-and-pitch captures.
+- Expression variants share the weight of their exact pose. `smile` uses the mean of the
+  available left/right mouth-smile coefficients; neutral receives the remaining expression
+  weight. Other expression names can map directly to a canonical blendshape key. Missing
+  expression variants do not take weight away from the available pose reference.
+- Roll and apparent scale never affect reference weights. They remain in `FaceState` for a
+  later geometric transform, so neither camera distance nor head tilt requires another
+  identity reference. Incomplete libraries interpolate across the remaining axis anchors
+  and always renormalize the result.
 
 ### Scheduling and lifetime
 
@@ -170,6 +187,9 @@ errors must be logged and handled at the orchestration boundary as processing fa
 - `MediaPipeFaceTracker` permits exactly one in-flight frame. It never owns an accumulating
   queue. The UI retains exactly that frame and draws diagnostics only when the result ID and
   timestamp match. Tracking latency is submission-to-callback time from `monotonic_ns`.
+- Reference selection is a small synchronous calculation on each matched tracked result.
+  It does not copy reference pixels, rerun enrollment preprocessing, or create another
+  queue. The current UI consumes the weights only for diagnostics.
 - Synchronous stage faults raise `StageError`; asynchronous faults return `ERROR`.
   Close/clear/reset operations are idempotent. Close stops worker callbacks before
   releasing buffers. Calls are serialized by the future pipeline controller; arbitrary
@@ -186,7 +206,8 @@ cannot be produced while replacement is enabled. Never automatically fall back t
 raw camera video or stale reference identity. The local UI shows the reason. A future
 explicit user action to disable replacement may enable raw passthrough; enabling
 passthrough and its visible state must be implemented together. Milestone 2 draws an
-optional local diagnostic overlay without altering `VideoFrame` pixels and emits no
+optional local diagnostic overlay without altering `VideoFrame` pixels. Milestone 4
+displays selection weights without rendering or compositing them. Neither milestone emits
 virtual-camera video.
 
 | Event | Intended behavior |

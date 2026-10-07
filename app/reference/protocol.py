@@ -27,6 +27,6 @@ class ReferenceSelector(Protocol):
     ) -> tuple[ReferenceWeight, ...]:
         """Return continuous normalized weights by yaw/pitch/expression.
 
-        Empty means unsupported pose/no compatible references. Roll is geometric.
+        Empty means unsupported pose/no compatible references. Roll and scale are geometric.
         """
         ...

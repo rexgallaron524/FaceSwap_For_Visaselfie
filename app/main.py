@@ -15,6 +15,7 @@ from app.camera import OpenCVCameraSource
 from app.camera.protocol import CameraSource
 from app.config import AppConfig, ConfigError, load_config
 from app.diagnostics.logging_setup import close_logging, configure_logging
+from app.reference.protocol import ReferenceSelector
 from app.tracking import MediaPipeFaceTracker
 from app.tracking.protocol import FaceTracker
 from app.ui.main_window import MainWindow
@@ -24,6 +25,7 @@ def create_application(
     config: AppConfig,
     camera_source_factory: Callable[[], CameraSource] | None = None,
     face_tracker_factory: Callable[[], FaceTracker] | None = None,
+    reference_selector: ReferenceSelector | None = None,
 ) -> tuple[QApplication, MainWindow]:
     """Create the shell without starting the event loop or opening any devices."""
     application = QApplication.instance()
@@ -37,6 +39,7 @@ def create_application(
         config,
         camera_source_factory or OpenCVCameraSource,
         face_tracker_factory or MediaPipeFaceTracker,
+        reference_selector,
     )
     return application, window
 
@@ -60,7 +63,10 @@ def main(argv: Sequence[str] | None = None) -> int:
         logger.info("Starting FaceLive; logs: %s", log_path)
         application, window = create_application(config)
         window.show()
-        logger.info("Application shell ready; live tracking available, face replacement inactive")
+        logger.info(
+            "Application shell ready; live tracking and reference selection available, "
+            "face replacement inactive"
+        )
         if args.smoke_test:
             QTimer.singleShot(250, window.close)
         exit_code = application.exec()

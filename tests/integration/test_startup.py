@@ -22,7 +22,10 @@ def test_application_starts_and_exits_cleanly(tmp_path, module):
     )
     assert result.returncode == 0, result.stdout + result.stderr
     log = (tmp_path / "FaceLive" / "logs" / "facelive.log").read_text(encoding="utf-8")
-    assert "Application shell ready; live tracking available, face replacement inactive" in log
+    assert (
+        "Application shell ready; live tracking and reference selection available, "
+        "face replacement inactive"
+    ) in log
     assert "Application stopped (exit 0)" in log
 
 
@@ -126,6 +129,9 @@ assert window.smile_label.text() == '70%'
 assert window.eye_closure_label.text() == '10% · 20%'
 assert window.mouth_activity_label.text() == '30% open'
 assert window.tracking_latency_label.text() == '4.2 ms'
+assert window.reference_selection_status.text() == 'No enrolled references'
+assert len(window.reference_weight_view.displayed_weights()) == 8
+assert set(window.reference_weight_view.displayed_weights().values()) == {0.0}
 assert window.preview_image.pixmap() is not None
 assert window.diagnostic_overlay_toggle.isChecked()
 assert window.mirror_preview_toggle.isChecked()

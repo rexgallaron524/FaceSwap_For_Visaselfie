@@ -35,10 +35,16 @@ from app.pipeline.types import (
     TrackingStatus,
     VideoFrame,
 )
-from app.reference import ReferenceLibrarySession, ReferenceLibraryStore
+from app.reference import (
+    PoseSpaceReferenceSelector,
+    ReferenceLibrarySession,
+    ReferenceLibraryStore,
+)
+from app.reference.protocol import ReferenceSelector
 from app.tracking import MediaPipeFaceTracker
 from app.tracking.protocol import FaceTracker
 from app.ui.reference_dialog import ReferenceEnrollmentDialog
+from app.ui.reference_weights import ReferenceWeightsWidget
 
 
 class MainWindow(QMainWindow):
@@ -47,11 +53,13 @@ class MainWindow(QMainWindow):
         config: AppConfig,
         camera_source_factory: Callable[[], CameraSource] = OpenCVCameraSource,
         face_tracker_factory: Callable[[], FaceTracker] = MediaPipeFaceTracker,
+        reference_selector: ReferenceSelector | None = None,
     ) -> None:
         super().__init__()
         self._config = config
         self._source = camera_source_factory()
         self._tracker = face_tracker_factory()
+        self._reference_selector = reference_selector or PoseSpaceReferenceSelector()
         self._devices: tuple[CameraDevice, ...] = ()
         self._capturing = False
         self._opening = False
@@ -100,6 +108,19 @@ class MainWindow(QMainWindow):
             QLabel#fieldLabel, QLabel#metricLabel {
                 color: #c9d3de;
                 font-weight: 500;
+            }
+            QLabel#weightLabel { color: #c8d5e5; font-size: 12px; }
+            QProgressBar#referenceWeight {
+                color: #f7fbff;
+                background: #111a25;
+                border: 1px solid #34465b;
+                border-radius: 5px;
+                font-size: 11px;
+                text-align: center;
+            }
+            QProgressBar#referenceWeight::chunk {
+                background: #2688e8;
+                border-radius: 4px;
             }
             QLabel#metricValue {
                 color: #ffffff;
@@ -368,7 +389,6 @@ class MainWindow(QMainWindow):
         self.virtual_camera_button = QPushButton("Start virtual camera", self)
         self.virtual_camera_button.setEnabled(False)
         self.virtual_camera_button.hide()
-        self._update_reference_summary()
         controls.addStretch()
         content.addLayout(controls)
 
@@ -466,12 +486,26 @@ class MainWindow(QMainWindow):
         metrics_layout.setColumnStretch(1, 1)
         metrics_layout.setColumnStretch(3, 1)
         preview_column.addWidget(metrics)
+
+        selection = QGroupBox("Reference selection")
+        selection.setObjectName("metricsCard")
+        selection_layout = QVBoxLayout(selection)
+        selection_layout.setContentsMargins(18, 22, 18, 14)
+        selection_layout.setSpacing(7)
+        self.reference_selection_status = QLabel("No enrolled references")
+        self.reference_selection_status.setObjectName("hint")
+        self.reference_weight_view = ReferenceWeightsWidget()
+        selection_layout.addWidget(self.reference_selection_status)
+        selection_layout.addWidget(self.reference_weight_view)
+        preview_column.addWidget(selection)
+
         content.addLayout(preview_column, 1)
         layout.addLayout(content, 1)
 
-        footer = QLabel("Milestone 2 · Live face tracking and diagnostics")
+        footer = QLabel("Milestone 4 · Continuous pose-space reference selection")
         footer.setObjectName("hint")
         layout.addWidget(footer)
+        self._update_reference_summary()
         self.statusBar().showMessage("Idle — no camera is open.")
 
         quit_action = QAction("Exit", self)
@@ -528,6 +562,17 @@ class MainWindow(QMainWindow):
         required = self._reference_library.required_count
         state = "Complete" if self._reference_library.is_complete else "Incomplete"
         self.reference_summary_label.setText(f"{state} · {complete} of {required} required")
+        references = self._reference_library.references()
+        self.reference_weight_view.set_references(
+            self._reference_library.slots(),
+            {reference.reference_id for reference in references},
+        )
+        if self._last_face_state is not None:
+            self._update_reference_selection(self._last_face_state)
+        else:
+            self._clear_reference_selection(
+                "Waiting for a tracked face" if references else "No enrolled references"
+            )
 
     def start_capture(self) -> None:
         device_id = self.camera_selector.currentData()
@@ -796,11 +841,13 @@ class MainWindow(QMainWindow):
             self._tracking_failed = True
             self._set_tracking_state("Error", "error")
             self._clear_face_metrics()
+            self._clear_reference_selection("Tracking unavailable")
             self.statusBar().showMessage(f"Face tracking stopped: {result.error}")
             return
         if result.status is TrackingStatus.NO_FACE:
             self._set_tracking_state("No face", "no-face")
             self._clear_face_metrics()
+            self._clear_reference_selection("No face tracked")
             return
         face = result.face
         self._set_tracking_state("Tracked", "running")
@@ -828,6 +875,37 @@ class MainWindow(QMainWindow):
         self.mouth_activity_label.setText(
             "Unavailable" if jaw_open is None else f"{jaw_open * 100:.0f}% open"
         )
+        self._update_reference_selection(face)
+
+    def _update_reference_selection(self, face: FaceState) -> None:
+        references = self._reference_library.references()
+        if not references:
+            self._clear_reference_selection("No enrolled references")
+            return
+        try:
+            weights = self._reference_selector.select(face, references)
+        except ValueError as exc:
+            self._logger.error("Reference selection failed: %s", exc)
+            self._clear_reference_selection("Selection error")
+            return
+        self.reference_weight_view.set_weights(weights)
+        if not weights:
+            self.reference_selection_status.setText("Pose unsupported by current references")
+            return
+        smile_values = [
+            face.blendshapes[name]
+            for name in ("mouth_smile_left", "mouth_smile_right")
+            if name in face.blendshapes
+        ]
+        smile = sum(smile_values) / len(smile_values) if smile_values else 0.0
+        self.reference_selection_status.setText(
+            f"Active · yaw {face.pose.yaw:+.1f}° · pitch {face.pose.pitch:+.1f}° · "
+            f"smile {smile * 100:.0f}%"
+        )
+
+    def _clear_reference_selection(self, status: str) -> None:
+        self.reference_weight_view.set_weights(())
+        self.reference_selection_status.setText(status)
 
     def _clear_face_metrics(self) -> None:
         self.tracking_confidence_label.setText("—")
@@ -841,6 +919,11 @@ class MainWindow(QMainWindow):
         self._clear_face_metrics()
         self.tracking_latency_label.setText("—")
         self.tracking_drops_label.setText("0")
+        self._clear_reference_selection(
+            "Waiting for a tracked face"
+            if self._reference_library.references()
+            else "No enrolled references"
+        )
 
     def _set_tracking_state(self, text: str, state: str) -> None:
         self.tracking_state_label.setText(text)

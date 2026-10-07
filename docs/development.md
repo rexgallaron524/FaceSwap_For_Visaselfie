@@ -137,8 +137,10 @@ before changing contracts or manifest formats.
 `app/tracking/mediapipe_tracker.py` owns the live MediaPipe adapter and its one-frame
 backpressure policy. `app/tracking/geometry.py` contains backend-independent coordinate,
 pose, blendshape-name, and confidence helpers. Keep MediaPipe objects inside the adapter.
+`app/reference/selector.py` owns the deterministic pose/expression interpolation. The live
+developer visualization is `app/ui/reference_weights.py`.
 
 Inspect code before each milestone, state a plan, implement only that milestone,
 add applicable tests, run checks, update docs, and stop for the next instruction.
 The runtime must keep processing local. Do not add portrait-rendering or native-camera
-packages until their dedicated milestones. No installer is produced in Milestones 2 or 3.
+packages until their dedicated milestones. No installer is produced in Milestones 2–4.

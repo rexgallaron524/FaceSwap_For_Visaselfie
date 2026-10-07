@@ -4,11 +4,12 @@ Local Windows 11 x64 desktop application for a consenting user's prepared refere
 appearance. The intended pipeline preserves the live body and surroundings while
 replacing only the facial region.
 
-**Current implementation: Milestones 2 and 3 — live tracking and reference enrollment.**
+**Current implementation: Milestones 2 through 4 — tracking, enrollment, and selection.**
 The app tracks one face asynchronously, displays a diagnostic mesh, pose, confidence,
 expressions, and latency, and preserves the unmodified camera pixels. Its reference dialog
-enrolls the eight initial pose/expression images into a persistent local library. Face
-replacement and virtual-camera output remain inactive.
+enrolls the eight initial pose/expression images into a persistent local library. Continuous
+pose-space weights and their live visualization are available. Face replacement and
+virtual-camera output remain inactive.
 
 ## Quick start (PowerShell)
 
@@ -39,6 +40,7 @@ uv run --locked facelive --smoke-test
 - [Milestone 1 change inventory, tests, and observed performance](docs/milestone_1.md)
 - [Milestone 2 change inventory, tests, and observed performance](docs/milestone_2.md)
 - [Milestone 3 change inventory, tests, and observed performance](docs/milestone_3.md)
+- [Milestone 4 change inventory and interpolation rules](docs/milestone_4.md)
 
 All processing is intended to stay local. Future functionality is for the user's
 own face or explicitly consenting subjects. Identity verification, liveness/proctoring

@@ -196,6 +196,12 @@ class ReferenceWeight:
     reference_id: str
     weight: float  # Finite, nonnegative; a nonempty selection sums to 1.
 
+    def __post_init__(self) -> None:
+        if not self.reference_id:
+            raise ValueError("Reference weight ID is required")
+        if not isfinite(self.weight) or self.weight < 0:
+            raise ValueError("Reference weight must be finite and nonnegative")
+
 
 @dataclass(frozen=True, slots=True)
 class RenderedFace:
