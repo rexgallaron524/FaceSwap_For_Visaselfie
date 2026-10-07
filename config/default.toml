@@ -13,6 +13,15 @@ fps = 30
 tracking_fps = 10
 opencv_threads = 4
 
+[transport]
+enabled = true
+name = "facelive_frames_v1"
+slot_count = 3
+capacity_width = 1280
+capacity_height = 720
+consumer_timeout_ms = 2000
+checksum = true
+
 [renderer]
 backend = "geometric"
 # Optional local neural provider. It is imported only for backend = "liveportrait".

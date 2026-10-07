@@ -44,6 +44,7 @@ from app.camera.protocol import CameraSource
 from app.compositing import AlphaFaceCompositor
 from app.compositing.protocol import Compositor
 from app.config import AppConfig
+from app.pipeline.protocol import FrameSink
 from app.pipeline.types import (
     CameraDevice,
     FaceState,
@@ -77,6 +78,9 @@ class _ProcessedFrame:
     output: VideoFrame
     rendering_ms: float
     compositing_ms: float
+    transport_ms: float
+    transport_accepted: bool
+    transport_error: str | None
     captured_at_ns: int
 
 
@@ -100,6 +104,7 @@ class MainWindow(QMainWindow):
         face_renderer_factory: Callable[[], FaceRenderer] | None = None,
         compositor: Compositor | None = None,
         stabilizer: Stabilizer | None = None,
+        frame_sink: FrameSink | None = None,
     ) -> None:
         super().__init__()
         self._config = config
@@ -109,6 +114,7 @@ class MainWindow(QMainWindow):
         self._renderer = (face_renderer_factory or GeometricFaceRenderer)()
         self._compositor = compositor or AlphaFaceCompositor()
         self._stabilizer = stabilizer or TemporalStabilizer()
+        self._frame_sink = frame_sink
         self._devices: tuple[CameraDevice, ...] = ()
         self._capturing = False
         self._opening = False
@@ -127,6 +133,7 @@ class MainWindow(QMainWindow):
         self._processing_drops = 0
         self._tracking_failed = False
         self._rendering_failed = False
+        self._transport_failed = False
         self._layout_mode: str | None = None
         self._metrics = CaptureMetrics()
         self._logger = logging.getLogger("facelive.ui")
@@ -140,7 +147,9 @@ class MainWindow(QMainWindow):
         elif self._reference_session.last_error:
             self._logger.warning(self._reference_session.last_error)
         self._camera_executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="camera-open")
-        self._open_future: Future[tuple[FrameFormat, str | None, str | None]] | None = None
+        self._open_future: Future[tuple[FrameFormat, str | None, str | None, str | None]] | None = (
+            None
+        )
         self._processing_executor = ThreadPoolExecutor(
             max_workers=1, thread_name_prefix="face-processing"
         )
@@ -551,6 +560,13 @@ class MainWindow(QMainWindow):
         self.compositing_latency_label.setObjectName("metricValue")
         self.complete_frame_latency_label = QLabel("—")
         self.complete_frame_latency_label.setObjectName("metricValue")
+        self.transport_state_label = QLabel("Idle" if self._frame_sink is not None else "Disabled")
+        self.transport_state_label.setObjectName("stateValue")
+        self.transport_state_label.setProperty(
+            "state", "idle" if self._frame_sink is not None else "no-face"
+        )
+        self.transport_latency_label = QLabel("—")
+        self.transport_latency_label.setObjectName("metricValue")
         self.tracking_drops_label = QLabel("0")
         self.tracking_drops_label.setObjectName("metricValue")
         self.processing_drops_label = QLabel("0")
@@ -574,6 +590,8 @@ class MainWindow(QMainWindow):
             ("Rendering latency", self.rendering_latency_label),
             ("Compositing latency", self.compositing_latency_label),
             ("Complete frame", self.complete_frame_latency_label),
+            ("Frame transport", self.transport_state_label),
+            ("Transport latency", self.transport_latency_label),
             ("Preview skips", self.preview_drops_label),
             ("Tracking skips", self.tracking_drops_label),
             ("Processing drops", self.processing_drops_label),
@@ -774,6 +792,7 @@ class MainWindow(QMainWindow):
             self._config.video.width, self._config.video.height, self._config.video.fps
         )
         self._opening = True
+        self._transport_failed = False
         self._metrics.reset()
         self._reset_tracking_diagnostics("Opening", "opening")
         self._tracking_drops = 0
@@ -802,10 +821,11 @@ class MainWindow(QMainWindow):
 
     def _open_capture_pipeline(
         self, device_id: str, requested: FrameFormat
-    ) -> tuple[FrameFormat, str | None, str | None]:
+    ) -> tuple[FrameFormat, str | None, str | None, str | None]:
         negotiated = self._source.open(device_id, requested)
         tracking_error = None
         rendering_error = None
+        transport_error = None
         try:
             self._tracker.open()
         except StageError as exc:
@@ -814,7 +834,12 @@ class MainWindow(QMainWindow):
             self._renderer.open(negotiated)
         except StageError as exc:
             rendering_error = str(exc)
-        return negotiated, tracking_error, rendering_error
+        if self._frame_sink is not None:
+            try:
+                self._frame_sink.open(negotiated)
+            except StageError as exc:
+                transport_error = str(exc)
+        return negotiated, tracking_error, rendering_error, transport_error
 
     def _finish_camera_open(self) -> None:
         future = self._open_future
@@ -824,7 +849,7 @@ class MainWindow(QMainWindow):
         self._open_future = None
         self._opening = False
         try:
-            negotiated, tracking_error, rendering_error = future.result()
+            negotiated, tracking_error, rendering_error, transport_error = future.result()
         except StageError as exc:
             self._source.close()
             try:
@@ -832,6 +857,8 @@ class MainWindow(QMainWindow):
             except StageError as close_exc:
                 self._logger.warning("Face tracker cleanup failed: %s", close_exc)
             self._renderer.close()
+            if self._frame_sink is not None:
+                self._frame_sink.close()
             self._show_camera_error(str(exc))
             self.camera_selector.setEnabled(bool(self._devices))
             self.refresh_button.setEnabled(True)
@@ -845,6 +872,8 @@ class MainWindow(QMainWindow):
             except StageError as close_exc:
                 self._logger.warning("Face tracker cleanup failed: %s", close_exc)
             self._renderer.close()
+            if self._frame_sink is not None:
+                self._frame_sink.close()
             self._logger.exception("Unexpected camera startup failure")
             self._show_camera_error(f"Unexpected camera startup failure: {exc}")
             self.camera_selector.setEnabled(bool(self._devices))
@@ -861,6 +890,14 @@ class MainWindow(QMainWindow):
             f"Active: {negotiated.width} × {negotiated.height} · "
             f"device reports {negotiated.fps:.1f} FPS"
         )
+        if self._frame_sink is None:
+            self._set_transport_state("Disabled", "no-face")
+        elif transport_error is None:
+            self._set_transport_state("Waiting for consumer", "opening")
+        else:
+            self._transport_failed = True
+            self._set_transport_state("Unavailable", "error")
+            self._logger.error("Frame transport startup failed: %s", transport_error)
         if tracking_error is None:
             self._set_tracking_state("Waiting for face", "opening")
             if rendering_error is None:
@@ -889,6 +926,8 @@ class MainWindow(QMainWindow):
         self._preview_timer.stop()
         self._metrics_timer.stop()
         self._drain_processing()
+        if self._frame_sink is not None:
+            self._frame_sink.close()
         self._source.close()
         try:
             self._tracker.close()
@@ -905,6 +944,7 @@ class MainWindow(QMainWindow):
         self._pending_tracking_frame = None
         self._tracking_failed = False
         self._rendering_failed = False
+        self._transport_failed = False
         self._processing_drops = 0
         self._stabilizer.reset()
         self._metrics.reset()
@@ -916,6 +956,7 @@ class MainWindow(QMainWindow):
         self.capture_fps_label.setText("—")
         self.preview_drops_label.setText("0")
         self.processing_drops_label.setText("0")
+        self.transport_latency_label.setText("—")
         self._reset_tracking_diagnostics("Idle", "idle")
         self.preview_image.setPixmap(QPixmap())
         self.preview_image.setText("Preview is idle.")
@@ -1160,11 +1201,23 @@ class MainWindow(QMainWindow):
         render_finished = time.perf_counter_ns()
         output = self._compositor.composite(frame, rendered)
         composite_finished = time.perf_counter_ns()
+        transport_accepted = False
+        transport_error = None
+        transport_finished = composite_finished
+        if self._frame_sink is not None and not self._transport_failed:
+            try:
+                transport_accepted = self._frame_sink.publish(output)
+            except StageError as exc:
+                transport_error = str(exc)
+            transport_finished = time.perf_counter_ns()
         return _ProcessedFrame(
             generation,
             output,
             (render_finished - render_started) / 1_000_000,
             (composite_finished - render_finished) / 1_000_000,
+            (transport_finished - composite_finished) / 1_000_000,
+            transport_accepted,
+            transport_error,
             captured_at_ns,
         )
 
@@ -1199,6 +1252,16 @@ class MainWindow(QMainWindow):
             self._set_rendering_state("Processed", "running")
             self.rendering_latency_label.setText(f"{processed.rendering_ms:.1f} ms")
             self.compositing_latency_label.setText(f"{processed.compositing_ms:.1f} ms")
+            if self._frame_sink is not None:
+                self.transport_latency_label.setText(f"{processed.transport_ms:.1f} ms")
+                if processed.transport_error is not None:
+                    self._transport_failed = True
+                    self._set_transport_state("Error", "error")
+                    self._logger.error("Frame transport failed: %s", processed.transport_error)
+                elif processed.transport_accepted:
+                    self._set_transport_state("Consumer connected", "running")
+                else:
+                    self._set_transport_state("Waiting for consumer", "opening")
             self._render_last_image()
             presented_at_ns = time.monotonic_ns()
             self.complete_frame_latency_label.setText(
@@ -1453,6 +1516,11 @@ class MainWindow(QMainWindow):
         self.rendering_latency_label.setText("—")
         self.compositing_latency_label.setText("—")
         self.complete_frame_latency_label.setText("—")
+        self._set_transport_state(
+            "Idle" if self._frame_sink is not None else "Disabled",
+            "idle" if self._frame_sink is not None else "no-face",
+        )
+        self.transport_latency_label.setText("—")
         self._clear_reference_selection(
             "Waiting for a tracked face"
             if self._reference_library.references()
@@ -1470,6 +1538,12 @@ class MainWindow(QMainWindow):
         self.rendering_state_label.setProperty("state", state)
         self.rendering_state_label.style().unpolish(self.rendering_state_label)
         self.rendering_state_label.style().polish(self.rendering_state_label)
+
+    def _set_transport_state(self, text: str, state: str) -> None:
+        self.transport_state_label.setText(text)
+        self.transport_state_label.setProperty("state", state)
+        self.transport_state_label.style().unpolish(self.transport_state_label)
+        self.transport_state_label.style().polish(self.transport_state_label)
 
     def _set_smoothing_state(self, text: str, state: str) -> None:
         self.smoothing_state_label.setText(text)
@@ -1501,6 +1575,8 @@ class MainWindow(QMainWindow):
         self._camera_executor.shutdown(wait=True, cancel_futures=True)
         self._source.close()
         self._drain_processing()
+        if self._frame_sink is not None:
+            self._frame_sink.close()
         try:
             self._tracker.close()
         except StageError as exc:

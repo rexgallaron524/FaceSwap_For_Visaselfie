@@ -17,12 +17,14 @@ from app.camera.protocol import CameraSource
 from app.compositing.protocol import Compositor
 from app.config import AppConfig, ConfigError, load_config
 from app.diagnostics.logging_setup import close_logging, configure_logging
+from app.pipeline.protocol import FrameSink
 from app.reference.protocol import ReferenceSelector
 from app.rendering import create_renderer_factory
 from app.rendering.protocol import FaceRenderer
 from app.stabilization.protocol import Stabilizer
 from app.tracking import MediaPipeFaceTracker
 from app.tracking.protocol import FaceTracker
+from app.transport import SharedMemoryFrameSink
 from app.ui.main_window import MainWindow
 
 
@@ -34,6 +36,7 @@ def create_application(
     face_renderer_factory: Callable[[], FaceRenderer] | None = None,
     compositor: Compositor | None = None,
     stabilizer: Stabilizer | None = None,
+    frame_sink: FrameSink | None = None,
 ) -> tuple[QApplication, MainWindow]:
     """Create the shell without starting the event loop or opening any devices."""
     cv2.setNumThreads(config.performance.opencv_threads)
@@ -44,6 +47,15 @@ def create_application(
         raise RuntimeError("FaceLive requires a QApplication, not a QCoreApplication")
     application.setApplicationName("FaceLive")
     application.setOrganizationName("FaceLive")
+    if frame_sink is None and config.transport.enabled:
+        frame_sink = SharedMemoryFrameSink(
+            config.transport.name,
+            slot_count=config.transport.slot_count,
+            capacity_width=config.transport.capacity_width,
+            capacity_height=config.transport.capacity_height,
+            consumer_timeout_ms=config.transport.consumer_timeout_ms,
+            checksum=config.transport.checksum,
+        )
     window = MainWindow(
         config,
         camera_source_factory or OpenCVCameraSource,
@@ -52,6 +64,7 @@ def create_application(
         face_renderer_factory or create_renderer_factory(config.renderer),
         compositor,
         stabilizer,
+        frame_sink,
     )
     return application, window
 

@@ -2,7 +2,7 @@
 
 ## Status and scope
 
-Milestones 2 through 8 implement the desktop shell, physical-camera preview, asynchronous
+Milestones 2 through 9 implement the desktop shell, physical-camera preview, asynchronous
 single-face tracking, diagnostics, local reference enrollment, continuous pose-space
 selection, and deterministic geometric face replacement. Tracking produces the
 backend-independent `FaceState`; selected references are warped to its landmark mesh and
@@ -10,7 +10,8 @@ composited through a feathered facial mask. Temporal stabilization now covers ge
 expressions, and selection weights. Milestone 7 adds an optional neural-renderer adapter,
 runtime boundary, and configuration selection while retaining geometry as the default.
 Milestone 8 adds measured bounded scheduling and a 1280×720 preview profile; virtual
-output remains planned. Target
+output remains planned. Milestone 9 adds the versioned shared-memory transport consumed by
+the future native camera. Target
 platform: Windows 11 x64, initial input/output 1280×720 at 30 FPS.
 
 Python 3.12 is the tested minor version. PySide6 supplies the desktop UI, NumPy supplies
@@ -35,8 +36,8 @@ flowchart LR
     Frame --> Compositor
     Compositor --> Policy[Output and failure policy]
     Policy --> Preview[Qt preview]
-    Policy --> Sink[FrameSink]
-    Sink --> Ring[Future bounded shared-memory buffer]
+    Policy --> Sink[SharedMemory FrameSink]
+    Sink --> Ring[Bounded three-slot RGB24 ring]
     Ring --> Native[Future native Media Foundation source]
     Native --> Meeting[Camera consumers]
 ```
@@ -56,7 +57,7 @@ lifecycles. Do not feed the FaceLive output back into its own input.
 | `FaceRenderer` | `app/rendering/protocol.py` | Render a face and mask through the configured geometric or optional neural backend |
 | `Compositor` | `app/compositing/protocol.py` | Blend into the matching original frame, preserving pixels outside the mask |
 | `Stabilizer` | `app/stabilization/protocol.py` | Smooth geometry/expression, preserve identity/time, reset history |
-| `FrameSink` | `app/pipeline/protocol.py` | Accept completed frames without blocking or accumulating latency |
+| `FrameSink` | `app/pipeline/protocol.py` | Publish completed frames without blocking or accumulating latency |
 
 These are structural `typing.Protocol` interfaces, not inheritance requirements or
 runtime validators. `OpenCVCameraSource` implements camera input and
@@ -66,7 +67,8 @@ slot-management operations. `PoseSpaceReferenceSelector` implements continuous s
 `GeometricFaceRenderer` and `AlphaFaceCompositor` implement the deterministic output path.
 `NeuralFaceRenderer` adapts an optional `PortraitAnimationRuntime` to the same output
 contract. `TemporalStabilizer` implements time-based geometry, expression, and weight
-smoothing plus a bounded tracking hold. Other stages accompany their milestones.
+smoothing plus a bounded tracking hold. `SharedMemoryFrameSink` implements the native
+boundary and `SharedMemoryFrameConsumer` is its standalone validation peer.
 
 The data records are in `app/pipeline/types.py`. Qt, MediaPipe, OpenCV, and Windows
 objects must remain inside adapters. Stage failures use `StageError`; programming
@@ -233,6 +235,10 @@ errors must be logged and handled at the orchestration boundary as processing fa
   request increments the processing-drop counter; no older work can accumulate. Qt converts
   and publishes one completed image at a time, then immediately starts the retained request.
   Stage timings use `perf_counter_ns`; complete-frame time ends after UI presentation.
+- A completed processed frame is offered to the configured `FrameSink` on the same worker
+  after compositing. Shared-memory publication has no work queue: it either publishes one
+  complete slot or reports a drop. With no live consumer heartbeat it updates health/drop
+  metadata and avoids the pixel copy. Local preview does not depend on sink acceptance.
 - The UI can bypass stabilization explicitly for comparison. Toggling it or changing the
   camera/reference library resets face and weight history. Diagnostics report stabilization
   cost plus the current translation and maximum pose correction.
@@ -351,13 +357,21 @@ stale processing frames were replaced. The configured 10 FPS tracking cadence an
 OpenCV threads were selected from measured alternatives on the 8-logical-CPU development
 machine. See `docs/milestone_8.md` for baseline, commands, tail latency, and limitations.
 
-After the preview pipeline is stable, implement a C++ Media Foundation custom Media
+Milestone 9 implements a versioned Windows shared-memory mapping with a 256-byte header,
+three fixed-capacity RGB24 slots, per-slot sequence/timestamp/format/CRC metadata, producer
+and consumer heartbeats, session UUIDs, and Windows named-mutex synchronization. A
+1280×720 stress run accepted 584 of 600 nonblocking attempts at 423.13 publications per
+second while a delayed consumer received 225 newest frames, skipped 359 stale sequences,
+and observed zero corrupt frames. Clean and crashed producer restarts receive a new session
+UUID and reset sequence safely. The byte-level ABI is
+`docs/frame_transport_protocol.md`; change it only through a new protocol version.
+
+Next, implement a C++ Media Foundation custom Media
 Source registered using `MFCreateVirtualCamera`, based on Microsoft's Windows Camera
 sample. Keep all ML/image processing outside that layer. A versioned shared-memory
-bounded ring will carry frame metadata and completed pixels. Sequence counters,
-publication synchronization, heartbeat/fallback, access permissions, pixel conversion,
-and ABI details require their own milestone. `FrameSink` is a Python abstraction,
-**not** a shared-memory ABI. No native implementation exists yet.
+bounded ring now carries frame metadata and completed pixels. The native consumer must add
+Media Foundation timestamps, RGB conversion, heartbeat placeholder behavior, registration,
+and packaging. No native implementation exists yet.
 
 ## References
 

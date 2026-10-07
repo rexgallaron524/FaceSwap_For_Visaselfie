@@ -90,11 +90,35 @@ class PerformanceConfig:
 
 
 @dataclass(frozen=True, slots=True)
+class TransportConfig:
+    enabled: bool = True
+    name: str = "facelive_frames_v1"
+    slot_count: int = 3
+    capacity_width: int = 1280
+    capacity_height: int = 720
+    consumer_timeout_ms: int = 2_000
+    checksum: bool = True
+
+    def __post_init__(self) -> None:
+        if type(self.enabled) is not bool or type(self.checksum) is not bool:
+            raise ConfigError("transport.enabled and transport.checksum must be booleans")
+        if not isinstance(self.name, str) or not re.fullmatch(r"[A-Za-z0-9_.-]+", self.name):
+            raise ConfigError(
+                "transport.name must use ASCII letters, digits, dot, dash, or underscore"
+            )
+        if type(self.slot_count) is not int or not 2 <= self.slot_count <= 8:
+            raise ConfigError("transport.slot_count must be between 2 and 8")
+        for name in ("capacity_width", "capacity_height", "consumer_timeout_ms"):
+            _positive_integer(f"transport.{name}", getattr(self, name))
+
+
+@dataclass(frozen=True, slots=True)
 class AppConfig:
     video: VideoConfig = field(default_factory=VideoConfig)
     logging: LoggingConfig = field(default_factory=LoggingConfig)
     renderer: RendererConfig = field(default_factory=RendererConfig)
     performance: PerformanceConfig = field(default_factory=PerformanceConfig)
+    transport: TransportConfig = field(default_factory=TransportConfig)
     debug: bool = False
 
     def __post_init__(self) -> None:
@@ -102,6 +126,11 @@ class AppConfig:
             raise ConfigError("app.debug must be true or false")
         if self.performance.tracking_fps > self.video.fps:
             raise ConfigError("performance.tracking_fps cannot exceed video.fps")
+        if self.transport.enabled and (
+            self.video.width > self.transport.capacity_width
+            or self.video.height > self.transport.capacity_height
+        ):
+            raise ConfigError("video dimensions exceed enabled transport capacity")
 
 
 def _table(data: dict[str, Any], name: str, allowed: set[str]) -> dict[str, Any]:
@@ -127,7 +156,14 @@ def load_config(path: Path | None = None) -> AppConfig:
             data = tomllib.load(stream)
     except (OSError, ValueError) as exc:
         raise ConfigError(f"Cannot read configuration {path}: {exc}") from exc
-    unknown = data.keys() - {"app", "video", "logging", "renderer", "performance"}
+    unknown = data.keys() - {
+        "app",
+        "video",
+        "logging",
+        "renderer",
+        "performance",
+        "transport",
+    }
     if unknown:
         raise ConfigError(f"Unknown configuration section(s): {', '.join(sorted(unknown))}")
     app = _table(data, "app", {"debug"})
@@ -135,6 +171,19 @@ def load_config(path: Path | None = None) -> AppConfig:
     logging = _table(data, "logging", {"level", "directory", "max_bytes", "backup_count"})
     renderer = _table(data, "renderer", {"backend", "runtime_module", "model_directory", "device"})
     performance = _table(data, "performance", {"tracking_fps", "opencv_threads"})
+    transport = _table(
+        data,
+        "transport",
+        {
+            "enabled",
+            "name",
+            "slot_count",
+            "capacity_width",
+            "capacity_height",
+            "consumer_timeout_ms",
+            "checksum",
+        },
+    )
     if "directory" in logging:
         raw = logging["directory"]
         if not isinstance(raw, str) or not raw.strip():
@@ -158,5 +207,6 @@ def load_config(path: Path | None = None) -> AppConfig:
         logging=LoggingConfig(**logging),
         renderer=RendererConfig(**renderer),
         performance=PerformanceConfig(**performance),
+        transport=TransportConfig(**transport),
         **app,
     )

@@ -80,6 +80,9 @@ device-reported FPS. The profiled defaults use `performance.tracking_fps = 10` a
 another target machine. `renderer.backend = "geometric"` is the default. Selecting
 `"liveportrait"` requires an explicitly installed local `renderer.runtime_module`; the app
 never downloads a provider or weights.
+The default `[transport]` section reserves a three-slot 1280×720 RGB24 shared-memory ring.
+Its name, capacity, consumer timeout, checksum, and enable flag are explicit configuration;
+the native consumer must use the matching v1 ABI.
 
 Select **Manage references…** to open enrollment. Loading an image initializes MediaPipe
 Face Landmarker lazily on the first request. Accepted additions and removals are saved
@@ -95,9 +98,12 @@ Choose the preview mode below **Mirror local preview**:
 - **Original camera** shows the canonical captured frame.
 - **Diagnostic tracking** adds local landmarks and face bounds.
 - **Processed output** runs reference selection, the configured face renderer, color
-  matching, and facial compositing. It requires at least one enrolled reference.
+  matching, facial compositing, and finished-frame transport. It requires at least one
+  enrolled reference.
 
-The diagnostics panel reports tracking, rendering, compositing, and complete-frame time.
+The diagnostics panel reports tracking, rendering, compositing, transport, and complete-frame
+time. Transport remains in **Waiting for consumer** until the standalone or future native
+consumer acknowledges the active session. No-consumer frames are dropped before pixel copy.
 It also reports smoothing time and the current translation/pose correction. Disable
 **Temporal smoothing** to compare raw and stabilized behavior. On the profiled development
 machine, processed output sustains 28.6–29.0 FPS at 1280×720; see
@@ -129,8 +135,9 @@ bounded asynchronous tracking, diagnostic values, geometric triangle warping, co
 reference interpolation, feathered masks, compositing invariants, and both UI shells. Tests
 also cover temporal geometry, expression and weight transitions, bounded tracking holds,
 the controlled MP4 contract, neural adapter output validation, reference feature caching,
-renderer selection, tightly cropped renderer output, and performance configuration. No
-webcam, GPU, model weights, or recorded real-person face data is needed.
+renderer selection, tightly cropped renderer output, performance configuration, exact frame
+transport layouts, newest-only delivery, cross-process contention, clean restart, and crash
+takeover. No webcam, GPU, model weights, or recorded real-person face data is needed.
 
 Run the optional physical-camera benchmark after closing other camera applications:
 
@@ -151,6 +158,16 @@ Profile the complete deterministic preview without a webcam:
 
 The tool measures every preview stage, bounded drop counts, and shutdown. Use the sequential
 `preview_pipeline.py` tool when locating a stage bottleneck before changing scheduling.
+
+Validate the native boundary without Media Foundation:
+
+```powershell
+.\.venv\Scripts\python.exe tools\transport\consume_frames.py --seconds 10
+.\.venv\Scripts\python.exe tools\benchmarks\frame_transport.py --frames 600
+```
+
+The first command is an independently attachable consumer. The second starts producer and
+consumer processes, deliberately outruns the consumer, and verifies every copied frame.
 
 Use `python -m ruff format .` to format code. The lint rules cover errors, imports,
 modern Python syntax, and common bug patterns. Test discovery is limited to `tests/`.
@@ -179,6 +196,9 @@ repeatable fixture generator is `tools/test_clips/generate_controlled_motion.py`
 enabled or disabled. `app/rendering/neural.py` owns the optional portrait-runtime adapter,
 reference appearance cache, and provider loader. `tools/benchmarks/neural_adapter.py`
 measures adapter overhead without claiming model inference performance.
+`app/transport/shared_memory.py` owns the v1 mapping, mutex, lifecycle, health, and pixel
+validation logic. Its byte layout is frozen in
+[`frame_transport_protocol.md`](frame_transport_protocol.md).
 
 Responsive UI checks cover wide (three-column), medium (two-column), and compact
 (single-column scrolling) window geometries. When changing shell cards or typography,
@@ -189,4 +209,4 @@ Inspect code before each milestone, state a plan, implement only that milestone,
 add applicable tests, run checks, update docs, and stop for the next instruction.
 The runtime must keep processing local. Neural providers and weight files require explicit
 dependency, performance, and license review before packaging. No installer is produced in
-Milestones 2–8.
+Milestones 2–9.

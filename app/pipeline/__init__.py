@@ -1,1 +1,1 @@
-"""Shared pipeline contracts. Stage scheduling is reserved for later milestones."""
+"""Shared pipeline contracts used by capture, processing, and frame transport."""

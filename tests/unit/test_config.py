@@ -14,6 +14,9 @@ def test_defaults_follow_local_app_data(monkeypatch, tmp_path):
     assert config.renderer.backend == "geometric"
     assert config.renderer.model_directory == tmp_path / "FaceLive" / "models" / "liveportrait"
     assert (config.performance.tracking_fps, config.performance.opencv_threads) == (10, 4)
+    assert config.transport.enabled is True
+    assert config.transport.name == "facelive_frames_v1"
+    assert (config.transport.slot_count, config.transport.consumer_timeout_ms) == (3, 2_000)
     assert config.debug is False
 
 
@@ -58,6 +61,14 @@ def test_partial_config_resolves_relative_paths(tmp_path):
         "[performance]\ntracking_fps = 0",
         "[performance]\nopencv_threads = 0",
         "[video]\nfps = 10\n[performance]\ntracking_fps = 11",
+        '[transport]\nenabled = "true"',
+        '[transport]\nname = "bad name"',
+        "[transport]\nslot_count = 1",
+        "[transport]\ncapacity_width = 0",
+        "[transport]\nconsumer_timeout_ms = 0",
+        "[transport]\nchecksum = 1",
+        "[video]\nwidth = 1920\n[transport]\ncapacity_width = 1280",
+        "[transport]\nunknown = true",
         "[invalid",
     ],
 )

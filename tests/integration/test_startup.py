@@ -101,9 +101,22 @@ class FakeTracker:
         return result
     def close(self):
         self.closed = True
+class FakeSink:
+    def __init__(self):
+        self.opened_formats = []
+        self.closed = 0
+    def open(self, frame_format):
+        self.opened_formats.append(frame_format)
+    def publish(self, frame):
+        return True
+    def close(self):
+        self.closed += 1
 source = FakeSource()
 tracker = FakeTracker()
-application, window = create_application(AppConfig(), lambda: source, lambda: tracker)
+sink = FakeSink()
+application, window = create_application(
+    AppConfig(), lambda: source, lambda: tracker, frame_sink=sink
+)
 window.show()
 application.processEvents()
 assert window.windowTitle() == 'FaceLive'
@@ -115,7 +128,7 @@ metric_labels = [
     label for label in window.diagnostics_card.findChildren(QLabel)
     if label.objectName() == 'metricLabel'
 ]
-assert len(metric_labels) == 19
+assert len(metric_labels) == 21
 assert all(label.height() >= label.fontMetrics().height() for label in metric_labels)
 assert all(
     bar.minimumHeight() >= bar.fontMetrics().height()
@@ -153,6 +166,7 @@ while not window._capturing and time.monotonic() < deadline:
     application.processEvents()
     time.sleep(0.01)
 assert window._capturing
+assert sink.opened_formats == [FrameFormat(2, 1, 30)]
 window._poll_camera()
 application.processEvents()
 assert window.capture_state_label.text() == 'Running'
@@ -195,6 +209,7 @@ while not window._capturing and time.monotonic() < deadline:
     application.processEvents()
     time.sleep(0.01)
 assert window._capturing
+assert sink.opened_formats == [FrameFormat(2, 1, 30), FrameFormat(2, 1, 30)]
 assert window.load_references.isEnabled()
 assert window.reference_summary_label.text() == 'Incomplete · 0 of 8 required'
 dialog = ReferenceEnrollmentDialog(window._reference_session, window)
@@ -218,6 +233,7 @@ application.processEvents()
 assert not window.isVisible()
 assert source.closed
 assert tracker.closed
+assert sink.closed == 2
 """
     result = subprocess.run(
         [sys.executable, "-c", script],

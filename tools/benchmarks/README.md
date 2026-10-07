@@ -58,3 +58,14 @@ comparison runs; their defaults match the profiled application configuration.
 
 Recorded Milestone 8 hardware, commands, rejected experiments, and results are in
 [`docs/milestone_8.md`](../../docs/milestone_8.md).
+
+Milestone 9 adds the cross-process shared-memory ring stress benchmark:
+
+```powershell
+.\.venv\Scripts\python.exe tools\benchmarks\frame_transport.py `
+  --frames 600 --consumer-delay-ms 1
+```
+
+It reports producer copy latency and drop rate, consumer sequence gaps and frame age,
+shared-memory size, and any patterned-pixel corruption. The consumer runs in a separate
+spawned process.
