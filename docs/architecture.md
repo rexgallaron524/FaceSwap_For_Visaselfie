@@ -2,11 +2,11 @@
 
 ## Status and scope
 
-Milestones 2 through 4 implement the desktop shell, physical-camera preview, asynchronous
-single-face tracking, diagnostics, local reference enrollment, and continuous pose-space
-reference selection. Tracking produces the backend-independent `FaceState`; the reference
-subsystem validates, aligns, normalizes, caches, saves, loads, and weights the eight initial
-images. Stabilization through virtual output in the diagram remains planned. Target
+Milestones 2 through 5 implement the desktop shell, physical-camera preview, asynchronous
+single-face tracking, diagnostics, local reference enrollment, continuous pose-space
+selection, and deterministic geometric face replacement. Tracking produces the
+backend-independent `FaceState`; selected references are warped to its landmark mesh and
+composited through a feathered facial mask. Stabilization and virtual output remain planned. Target
 platform: Windows 11 x64, initial input/output 1280×720 at 30 FPS.
 
 Python 3.12 is the tested minor version. PySide6 supplies the desktop UI, NumPy supplies
@@ -60,7 +60,8 @@ runtime validators. `OpenCVCameraSource` implements camera input and
 `MediaPipeFaceTracker` implements bounded live tracking. `ReferenceLibraryStore`
 implements the stable `ReferenceLibrary` surface plus enrollment, persistence, and
 slot-management operations. `PoseSpaceReferenceSelector` implements continuous selection.
-Other stages and their boundary validation will accompany their milestones.
+`GeometricFaceRenderer` and `AlphaFaceCompositor` implement the first deterministic output
+path. Other stages and their boundary validation will accompany their milestones.
 
 The data records are in `app/pipeline/types.py`. Qt, MediaPipe, OpenCV, and Windows
 objects must remain inside adapters. Stage failures use `StageError`; programming
@@ -80,8 +81,8 @@ errors must be logged and handled at the orchestration boundary as processing fa
   own local self-view, while remote participants receive the unmirrored output.
 - Alpha masks are full-frame `float32` arrays `(height, width)`, finite in `[0, 1]`.
   The renderer outputs full-frame RGB plus alpha to avoid ambiguous crop transforms.
-  Full-frame allocation cost is an intentional initial simplicity tradeoff; profile
-  before introducing ROI buffers.
+  Implementations may calculate mask, color, and blend operations within a clipped face
+  region, but the published contract remains full-frame and zero outside that region.
 - Frozen dataclasses prevent field rebinding; they do **not** freeze NumPy arrays or
   mappings. Producers must publish read-only snapshots (or enforce exclusive ownership),
   keep their buffers alive while referenced, and never overwrite published storage.
@@ -166,9 +167,18 @@ errors must be logged and handled at the orchestration boundary as processing fa
   weight. Other expression names can map directly to a canonical blendshape key. Missing
   expression variants do not take weight away from the available pose reference.
 - Roll and apparent scale never affect reference weights. They remain in `FaceState` for a
-  later geometric transform, so neither camera distance nor head tilt requires another
-  identity reference. Incomplete libraries interpolate across the remaining axis anchors
-  and always renormalize the result.
+  geometric transform, so neither camera distance nor head tilt requires another identity
+  reference. Incomplete libraries interpolate across the remaining axis anchors and always
+  renormalize the result.
+- The geometric renderer accepts only matching `mediapipe-face-landmarker-478-v1` live and
+  reference meshes. A cached Delaunay topology joins the face oval and interior eye, brow,
+  nose, lip, and support landmarks. Each selected reference is affinely warped per triangle
+  and combined by its normalized selection weight. Live landmarks carry translation, scale,
+  yaw/pitch deformation, and roll into the output without rectangular image placement.
+- The facial alpha region is the live face-oval convex hull with scale-relative inward
+  feathering. The compositor performs bounded per-channel mean/contrast correction within
+  that region, then alpha blends into a new frame. Pixels where alpha is zero remain exactly
+  equal to the original camera frame.
 
 ### Scheduling and lifetime
 
@@ -188,8 +198,14 @@ errors must be logged and handled at the orchestration boundary as processing fa
   queue. The UI retains exactly that frame and draws diagnostics only when the result ID and
   timestamp match. Tracking latency is submission-to-callback time from `monotonic_ns`.
 - Reference selection is a small synchronous calculation on each matched tracked result.
-  It does not copy reference pixels, rerun enrollment preprocessing, or create another
-  queue. The current UI consumes the weights only for diagnostics.
+  It does not rerun enrollment preprocessing or create another queue. In processed preview
+  mode, the selected cached pixels and landmarks feed geometric rendering and compositing.
+  Original and diagnostic modes skip those two stages.
+- Geometric rendering and compositing currently execute synchronously after a matched
+  tracking result. No processed-frame queue exists: a new camera frame is submitted only
+  through the tracker's existing one-frame backpressure path. Stage timings use
+  `perf_counter_ns`; complete-frame time starts when that retained frame is submitted for
+  tracking and ends after composition.
 - Synchronous stage faults raise `StageError`; asynchronous faults return `ERROR`.
   Close/clear/reset operations are idempotent. Close stops worker callbacks before
   releasing buffers. Calls are serialized by the future pipeline controller; arbitrary
@@ -220,10 +236,10 @@ Product decision: output a configured placeholder whenever a valid processed fra
 cannot be produced while replacement is enabled. Never automatically fall back to
 raw camera video or stale reference identity. The local UI shows the reason. A future
 explicit user action to disable replacement may enable raw passthrough; enabling
-passthrough and its visible state must be implemented together. Milestone 2 draws an
-optional local diagnostic overlay without altering `VideoFrame` pixels. Milestone 4
-displays selection weights without rendering or compositing them. Neither milestone emits
-virtual-camera video.
+passthrough and its visible state must be implemented together. The original-camera and
+diagnostic preview modes are explicit user choices and never alter `VideoFrame` pixels.
+Processed mode does not silently display raw video when no valid composite exists; it
+shows an unavailable/waiting state. No milestone emits virtual-camera video yet.
 
 | Event | Intended behavior |
 | --- | --- |
@@ -255,6 +271,13 @@ measured 30.0 capture FPS, completed 142 tracking requests in six seconds, and d
 busy submissions instead of queueing them. Mean tracker latency was 13.9 ms and p95 was
 16.0 ms. A deterministic 512×512 face-image run completed 60 frames at 78.8 FPS with
 11.2 ms mean and 16.0 ms p95 latency. These are local CPU measurements, not guarantees.
+
+The Milestone 5 deterministic synthetic benchmark used a 330×390 tracked face in a
+1280×720 frame. Median render/composite totals were 76.2 ms with one active reference,
+79.7 ms with two, and 99.4 ms with four. The UI reports live tracking, rendering,
+compositing, and complete-frame timings because reference count, face size, CPU, and camera
+content materially affect throughput. These results establish a maintainable CPU baseline;
+they do not claim 30 FPS processed output.
 
 After the preview pipeline is stable, implement a C++ Media Foundation custom Media
 Source registered using `MFCreateVirtualCamera`, based on Microsoft's Windows Camera

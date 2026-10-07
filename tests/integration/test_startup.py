@@ -22,10 +22,7 @@ def test_application_starts_and_exits_cleanly(tmp_path, module):
     )
     assert result.returncode == 0, result.stdout + result.stderr
     log = (tmp_path / "FaceLive" / "logs" / "facelive.log").read_text(encoding="utf-8")
-    assert (
-        "Application shell ready; live tracking and reference selection available, "
-        "face replacement inactive"
-    ) in log
+    assert "Application shell ready; geometric face replacement preview available" in log
     assert "Application stopped (exit 0)" in log
 
 
@@ -118,7 +115,7 @@ metric_labels = [
     label for label in window.diagnostics_card.findChildren(QLabel)
     if label.objectName() == 'metricLabel'
 ]
-assert len(metric_labels) == 11
+assert len(metric_labels) == 15
 assert all(label.height() >= label.fontMetrics().height() for label in metric_labels)
 assert all(
     bar.minimumHeight() >= bar.fontMetrics().height()
@@ -170,7 +167,8 @@ assert window.reference_selection_status.text() == 'No enrolled references'
 assert len(window.reference_weight_view.displayed_weights()) == 8
 assert set(window.reference_weight_view.displayed_weights().values()) == {0.0}
 assert window.preview_image.pixmap() is not None
-assert window.diagnostic_overlay_toggle.isChecked()
+assert window.preview_mode_selector.currentData() == 'diagnostic'
+assert window.preview_mode_selector.count() == 3
 assert window.mirror_preview_toggle.isChecked()
 assert window._last_image.pixelColor(0, 0).red() == 255
 mirrored = window._oriented_preview_image()

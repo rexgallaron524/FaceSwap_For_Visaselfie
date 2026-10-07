@@ -1,1 +1,5 @@
-"""Face renderer boundary; no geometric or neural renderer is implemented yet."""
+"""Face rendering implementations and contracts."""
+
+from app.rendering.geometric import GeometricFaceRenderer
+
+__all__ = ["GeometricFaceRenderer"]
