@@ -14,6 +14,8 @@ htmlcov/
 config/local.toml
 models/*
 !models/README.md
+!models/face_landmarker.task
+!models/LICENSE.face-landmarker.txt
 tests/assets/*
 !tests/assets/README.md
 references/

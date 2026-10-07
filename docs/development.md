@@ -5,7 +5,8 @@
 - Windows 11 x64; no GPU is needed. A webcam is needed only for live preview/benchmark.
 - Python 3.12 x64. `.python-version` and `requires-python` intentionally select this
   minor version until later dependencies have been validated.
-- Network access for initial dependency/runtime installation. Running the shell is local.
+- Network access for initial dependency/runtime installation. The Face Landmarker model is
+  versioned in `models/`, so enrollment and normal use stay local after checkout.
 
 ## Reproducible setup
 
@@ -74,6 +75,12 @@ except standard `LOCALAPPDATA` for the log location and Qt's own environment set
 Relative log paths resolve against the TOML file's parent. Video dimensions/FPS are
 camera requests; the app shows the actual negotiated frame size and device-reported FPS.
 
+Select **Manage references…** to open enrollment. Loading an image initializes MediaPipe
+Face Landmarker lazily on the first request. Saving produces a manifest and asset directory
+at the selected location; both are required when moving a library. Personal libraries and
+source images belong in ignored `references/` or outside the repository. See the
+[capture guide](reference_capture.md) for required poses and image conditions.
+
 Logs go to `%LOCALAPPDATA%\FaceLive\logs\facelive.log` by default, with three backups
 and a 2,000,000-byte rotation threshold. Without `LOCALAPPDATA`, the path is
 `~/AppData/Local/FaceLive/logs`. Timestamps are UTC. Console output and the dedicated
@@ -93,8 +100,10 @@ log setup/CLI failure, 1 unexpected app failure.
 Tests run the actual Qt process in offscreen mode with a temporary log directory.
 They cover startup/clean shutdown, installed-package launch from another directory,
 camera abstraction behavior, RGB conversion, timestamps, disconnect/reconnect UI state,
-configuration validation, and bounded logging. Tests use generated NumPy frames, so no
-webcam, GPU, model, or recorded face data is needed.
+configuration validation, bounded logging, reference validation, deterministic manifest
+serialization, checksum rejection, extensible slots, reference lookup, and the enrollment
+dialog shell. Tests use generated NumPy frames and a fake detector, so no webcam, GPU, or
+recorded face data is needed.
 
 Run the optional physical-camera benchmark after closing other camera applications:
 
@@ -114,10 +123,13 @@ modern Python syntax, and common bug patterns. Test discovery is limited to `tes
 `app/main.py` owns startup; `app/ui/` owns Qt; `app/camera/opencv_source.py` confines
 OpenCV and Windows camera discovery; pipeline records and sink protocol live in
 `app/pipeline/`. Each processing subsystem has a protocol module. `native/`,
-`models/`, fixture assets, and tooling directories contain scope notes until their
-milestones begin. Read [architecture.md](architecture.md) before changing contracts.
+fixture assets, and tooling directories contain scope notes until their milestones begin.
+`app/reference/` owns enrollment models, the detector boundary, one-time preprocessing,
+and persistence. `models/face_landmarker.task` is the pinned local enrollment model; its
+provenance and checksum are in `models/README.md`. Read [architecture.md](architecture.md)
+before changing contracts or manifest formats.
 
 Inspect code before each milestone, state a plan, implement only that milestone,
 add applicable tests, run checks, update docs, and stop for the next instruction.
-The runtime must keep processing local. Do not add model or native camera packages
-until their dedicated milestones. No installer is produced in milestone 1.
+The runtime must keep processing local. Do not add portrait-rendering or native-camera
+packages until their dedicated milestones. No installer is produced in milestone 3.

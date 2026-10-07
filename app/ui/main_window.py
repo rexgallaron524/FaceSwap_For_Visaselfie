@@ -27,6 +27,8 @@ from app.camera.metrics import CaptureMetrics
 from app.camera.protocol import CameraSource
 from app.config import AppConfig
 from app.pipeline.types import CameraDevice, FrameFormat, StageError, VideoFrame
+from app.reference import ReferenceLibraryStore
+from app.ui.reference_dialog import ReferenceEnrollmentDialog
 
 
 class MainWindow(QMainWindow):
@@ -43,6 +45,7 @@ class MainWindow(QMainWindow):
         self._opening = False
         self._last_image: QImage | None = None
         self._metrics = CaptureMetrics()
+        self._reference_library = ReferenceLibraryStore()
         self._logger = logging.getLogger("facelive.ui")
         self._camera_executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="camera-open")
         self._open_future: Future[FrameFormat] | None = None
@@ -55,7 +58,7 @@ class MainWindow(QMainWindow):
                 font-family: "Segoe UI Variable", "Segoe UI";
                 font-size: 14px;
             }
-            QMainWindow, QWidget#shell {
+            QMainWindow, QDialog, QMessageBox, QWidget#shell, QWidget#referenceGrid {
                 background: #0b1017;
                 color: #f4f7fb;
             }
@@ -198,6 +201,36 @@ class MainWindow(QMainWindow):
                 border: 1px solid #64778c;
                 padding: 6px;
             }
+            QScrollArea, QScrollArea > QWidget > QWidget {
+                background: #0b1017;
+                border: 0;
+            }
+            QFrame#referenceCard {
+                background: #151c25;
+                border: 1px solid #344252;
+                border-radius: 10px;
+            }
+            QLabel#dialogTitle {
+                color: #ffffff;
+                font-size: 24px;
+                font-weight: 700;
+            }
+            QLabel#dialogDescription, QLabel#referenceGuidance { color: #b5c0cd; }
+            QLabel#referenceCardTitle {
+                color: #ffffff;
+                font-size: 16px;
+                font-weight: 700;
+            }
+            QLabel#referenceThumbnail {
+                color: #9fabb8;
+                background: #090d12;
+                border: 1px solid #3c4b5d;
+                border-radius: 7px;
+            }
+            QLabel#referenceStatus { color: #f2bb60; font-weight: 700; }
+            QLabel#referenceStatus[valid="true"] { color: #5ee6a8; }
+            QLabel#referenceSummary { color: #f2bb60; font-weight: 700; }
+            QLabel#referenceSummary[complete="true"] { color: #5ee6a8; }
         """)
         self._build_ui()
 
@@ -271,21 +304,32 @@ class MainWindow(QMainWindow):
         source_layout.addWidget(self.mirror_preview_toggle)
         controls.addWidget(sources)
 
-        future = QGroupBox("Later milestones")
-        future.setMinimumHeight(195)
-        future_layout = QVBoxLayout(future)
-        future_layout.setContentsMargins(18, 22, 18, 18)
-        future_layout.setSpacing(11)
-        self.load_references = QPushButton("Load references…")
-        self.load_references.setEnabled(False)
-        future_layout.addWidget(self.load_references)
-        self.replacement_toggle = QCheckBox("Enable face replacement")
+        references = QGroupBox("Reference library")
+        references.setMinimumHeight(155)
+        reference_layout = QVBoxLayout(references)
+        reference_layout.setContentsMargins(18, 22, 18, 18)
+        reference_layout.setSpacing(9)
+        self.load_references = QPushButton("Manage references…")
+        self.load_references.clicked.connect(self.open_reference_enrollment)
+        reference_layout.addWidget(self.load_references)
+        self.reference_summary_label = QLabel()
+        self.reference_summary_label.setObjectName("hint")
+        reference_layout.addWidget(self.reference_summary_label)
+        reference_hint = QLabel("Images are validated and preprocessed once during enrollment.")
+        reference_hint.setObjectName("hint")
+        reference_hint.setWordWrap(True)
+        reference_layout.addWidget(reference_hint)
+        controls.addWidget(references)
+
+        # These controls remain part of the stable shell API but are not shown until
+        # their implementation milestones.
+        self.replacement_toggle = QCheckBox("Enable face replacement", self)
         self.replacement_toggle.setEnabled(False)
-        future_layout.addWidget(self.replacement_toggle)
-        self.virtual_camera_button = QPushButton("Start virtual camera")
+        self.replacement_toggle.hide()
+        self.virtual_camera_button = QPushButton("Start virtual camera", self)
         self.virtual_camera_button.setEnabled(False)
-        future_layout.addWidget(self.virtual_camera_button)
-        controls.addWidget(future)
+        self.virtual_camera_button.hide()
+        self._update_reference_summary()
         controls.addStretch()
         content.addLayout(controls)
 
@@ -332,7 +376,7 @@ class MainWindow(QMainWindow):
         content.addLayout(preview_column, 1)
         layout.addLayout(content, 1)
 
-        footer = QLabel("Milestone 1 · Webcam capture and live preview")
+        footer = QLabel("Milestone 3 · Reference library and enrollment")
         footer.setObjectName("hint")
         layout.addWidget(footer)
         self.statusBar().showMessage("Idle — no camera is open.")
@@ -379,6 +423,18 @@ class MainWindow(QMainWindow):
             self.stop_capture()
         else:
             self.start_capture()
+
+    def open_reference_enrollment(self) -> None:
+        dialog = ReferenceEnrollmentDialog(self._reference_library, self)
+        dialog.library_changed.connect(self._update_reference_summary)
+        dialog.exec()
+        self._update_reference_summary()
+
+    def _update_reference_summary(self) -> None:
+        complete = self._reference_library.completed_required_count
+        required = self._reference_library.required_count
+        state = "Complete" if self._reference_library.is_complete else "Incomplete"
+        self.reference_summary_label.setText(f"{state} · {complete} of {required} required")
 
     def start_capture(self) -> None:
         device_id = self.camera_selector.currentData()
@@ -538,4 +594,5 @@ class MainWindow(QMainWindow):
         self._metrics_timer.stop()
         self._camera_executor.shutdown(wait=True, cancel_futures=True)
         self._source.close()
+        self._reference_library.close()
         event.accept()

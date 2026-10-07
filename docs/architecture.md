@@ -2,16 +2,16 @@
 
 ## Status and scope
 
-Milestone 1 implements the desktop shell, configuration, logging, Python contracts,
-physical-camera enumeration/capture, live preview, and capture metrics. Tracking through
-virtual output in the diagram remains planned. Target platform: Windows 11 x64, initial
-input/output 1280×720 at 30 FPS. Camera capture has been measured on the development
-machine; processing and output performance have not.
+Milestone 3 implements the desktop shell, physical-camera preview, and local reference
+enrollment. The reference subsystem validates, aligns, normalizes, caches, saves, and loads
+the eight initial pose/expression images. Live tracking through virtual output in the diagram
+remains planned. Target platform: Windows 11 x64, initial input/output 1280×720 at 30 FPS.
 
 Python 3.12 is the tested minor version. PySide6 supplies the desktop UI, NumPy supplies
 common image types, and OpenCV with `cv2-enumerate-cameras` supplies the current Windows
-camera adapter. MediaPipe, neural libraries, and native output dependencies remain
-deferred. Importing modules never opens hardware.
+camera adapter. MediaPipe Face Landmarker runs in still-image mode only during reference
+enrollment. Neural portrait rendering and native output dependencies remain deferred.
+Importing modules never opens hardware or initializes the face detector.
 
 ## Intended pipeline
 
@@ -53,8 +53,10 @@ lifecycles. Do not feed the FaceLive output back into its own input.
 | `FrameSink` | `app/pipeline/protocol.py` | Accept completed frames without blocking or accumulating latency |
 
 These are structural `typing.Protocol` interfaces, not inheritance requirements or
-runtime validators. `OpenCVCameraSource` is the first implementation; other stage
-implementations and boundary validation will accompany their milestones.
+runtime validators. `OpenCVCameraSource` implements camera input and
+`ReferenceLibraryStore` implements the stable `ReferenceLibrary` surface plus enrollment,
+persistence, and slot-management operations. Other stages and their boundary validation
+will accompany their milestones.
 The data records are in `app/pipeline/types.py`. Qt, MediaPipe, OpenCV, and Windows
 objects must remain inside adapters. Stage failures use `StageError`; programming
 errors must be logged and handled at the orchestration boundary as processing failures.
@@ -82,6 +84,26 @@ errors must be logged and handled at the orchestration boundary as processing fa
   Compositing produces a new frame and preserves original pixels wherever alpha is zero.
 - Reference arrays and landmarks refer to aligned reference-image coordinates and
   remain cached until the library is cleared. Expensive preprocessing never runs per frame.
+- Enrollment images are converted to unmirrored RGB, validated by a detector adapter, and
+  aligned from their eye landmarks into a 512×512 immutable image. The cached landmark
+  schema is `mediapipe-face-landmarker-478-v1`. Renderer code must check that schema before
+  consuming the points.
+
+### Reference-library persistence
+
+- The JSON manifest schema is `facelive-reference-library`, version 1. It stores slot
+  definitions, pose/expression labels, source-image metadata, quality measurements,
+  blendshapes, normalized landmarks, and checksums. This explicit slot list permits more
+  poses and optional expression variants without changing the pipeline types.
+- Normalized PNG assets live beside the manifest in `<manifest-name>_assets`. Original
+  source images are not copied into the library. Paths are resolved within the manifest
+  directory and asset checksums are verified before decoding.
+- A failed load clears the current library. Incompatible schema, normalization dimensions,
+  landmark schema, duplicate slot IDs, missing assets, invalid landmarks, and checksum
+  failures are rejected rather than partially loaded.
+- The source filename and SHA-256 digest identify enrollment input for diagnostics. They
+  are metadata, not proof of consent or identity. Library files contain biometric data and
+  should remain under the user's control.
 
 ### Time, geometry, and expressions
 
@@ -115,7 +137,9 @@ errors must be logged and handled at the orchestration boundary as processing fa
 - Qt widgets and the event loop stay on the GUI thread. Camera opening runs in a small
   executor because device setup may block. The camera adapter owns a capture thread;
   a 10 ms Qt timer polls its latest complete frame. The GUI copies RGB pixels into a
-  `QImage` before releasing the source snapshot. Future processing also runs outside Qt.
+  `QImage` before releasing the source snapshot. Reference enrollment is a user-triggered,
+  one-time synchronous operation; it is never part of the live-frame loop. Future live
+  processing runs outside Qt.
 - `CameraSource.read_latest`, `FaceTracker.submit/poll_latest`, and `FrameSink.publish`
   are nonblocking. Implementations use bounded storage and favor the newest complete
   frame. Resource setup/loading can block and belongs outside the GUI thread later.
@@ -137,7 +161,7 @@ Product decision: output a configured placeholder whenever a valid processed fra
 cannot be produced while replacement is enabled. Never automatically fall back to
 raw camera video or stale reference identity. The local UI shows the reason. A future
 explicit user action to disable replacement may enable raw passthrough; enabling
-passthrough and its visible state must be implemented together. Milestone 1 only previews
+passthrough and its visible state must be implemented together. Milestone 3 only previews
 the raw physical input locally and emits no virtual-camera video.
 
 | Event | Intended behavior |
@@ -176,9 +200,9 @@ and ABI details require their own milestone. `FrameSink` is a Python abstraction
 ## References
 
 - [Qt for Python setup](https://doc.qt.io/qtforpython-6/gettingstarted.html)
-- [MediaPipe Python setup](https://developers.google.com/edge/mediapipe/solutions/setup_python)
+- [MediaPipe Face Landmarker for Python](https://developers.google.com/edge/mediapipe/solutions/vision/face_landmarker/python)
+- [MediaPipe Face Landmarker models](https://developers.google.com/edge/mediapipe/solutions/vision/face_landmarker/index#models)
 - [uv Python provisioning](https://docs.astral.sh/uv/guides/install-python/)
 
-Neural refinement is deferred until deterministic geometry has been evaluated. The
-next proposed milestone is live face tracking with backend-independent `FaceState`
-output and diagnostics; it requires an explicit user instruction.
+Neural refinement is deferred until deterministic geometry has been evaluated. Continue
+only after an explicit instruction for the next milestone.

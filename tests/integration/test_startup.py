@@ -48,6 +48,7 @@ import numpy as np
 from app.config import AppConfig
 from app.main import create_application
 from app.pipeline.types import CameraDevice, FrameFormat, StageError, VideoFrame
+from app.ui.reference_dialog import ReferenceEnrollmentDialog
 class FakeSource:
     def __init__(self):
         self.frames = 0
@@ -111,7 +112,19 @@ while not window._capturing and time.monotonic() < deadline:
     application.processEvents()
     time.sleep(0.01)
 assert window._capturing
-assert not window.load_references.isEnabled()
+assert window.load_references.isEnabled()
+assert window.reference_summary_label.text() == 'Incomplete · 0 of 8 required'
+dialog = ReferenceEnrollmentDialog(window._reference_library, window)
+dialog.show()
+application.processEvents()
+assert len(dialog._cards) == 8
+assert set(dialog._cards) == {
+    'front-neutral', 'front-smile', 'left-20', 'left-40',
+    'right-20', 'right-40', 'up', 'down'
+}
+assert dialog.summary.text() == '0 of 8 required references valid'
+assert not dialog.save_button.isEnabled()
+dialog.close()
 assert not window.replacement_toggle.isEnabled()
 assert not window.replacement_toggle.isChecked()
 assert not window.virtual_camera_button.isEnabled()
