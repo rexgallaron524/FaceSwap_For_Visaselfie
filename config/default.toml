@@ -8,6 +8,15 @@ width = 1280
 height = 720
 fps = 30
 
+[renderer]
+backend = "geometric"
+# Optional local neural provider. It is imported only for backend = "liveportrait".
+runtime_module = "facelive_liveportrait"
+device = "auto"
+# Default: %LOCALAPPDATA%/FaceLive/models/liveportrait
+# Relative paths resolve from this TOML file's directory.
+# model_directory = "../models/liveportrait"
+
 [logging]
 level = "INFO"
 max_bytes = 2000000

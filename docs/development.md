@@ -2,7 +2,8 @@
 
 ## Requirements
 
-- Windows 11 x64; no GPU is needed. A webcam is needed only for live preview/benchmark.
+- Windows 11 x64; no GPU is needed for the default geometric renderer. A webcam is needed
+  only for live preview/benchmark.
 - Python 3.12 x64. `.python-version` and `requires-python` intentionally select this
   minor version until later dependencies have been validated.
 - Network access for initial dependency/runtime installation. The Face Landmarker model is
@@ -72,8 +73,11 @@ Copy it to ignored `config/local.toml` for personal overrides. Unknown keys/sect
 invalid types, nonpositive dimensions/FPS/log limits, and unreadable files fail startup.
 Only explicit configuration is loaded; no hidden environment-variable overrides exist
 except standard `LOCALAPPDATA` for the log location and Qt's own environment settings.
-Relative log paths resolve against the TOML file's parent. Video dimensions/FPS are
-camera requests; the app shows the actual negotiated frame size and device-reported FPS.
+Relative log and renderer model paths resolve against the TOML file's parent. Video
+dimensions/FPS are camera requests; the app shows the actual negotiated frame size and
+device-reported FPS. `renderer.backend = "geometric"` is the default. Selecting
+`"liveportrait"` requires an explicitly installed local `renderer.runtime_module`; the app
+never downloads a provider or weights.
 
 Select **Manage references…** to open enrollment. Loading an image initializes MediaPipe
 Face Landmarker lazily on the first request. Accepted additions and removals are saved
@@ -88,8 +92,8 @@ Choose the preview mode below **Mirror local preview**:
 
 - **Original camera** shows the canonical captured frame.
 - **Diagnostic tracking** adds local landmarks and face bounds.
-- **Processed output** runs reference selection, geometric warping, color matching, and
-  facial compositing. It requires at least one enrolled reference.
+- **Processed output** runs reference selection, the configured face renderer, color
+  matching, and facial compositing. It requires at least one enrolled reference.
 
 The diagnostics panel reports tracking, rendering, compositing, and complete-frame time.
 It also reports smoothing time and the current translation/pose correction. Disable
@@ -121,7 +125,8 @@ restart restoration, active-library switching, coordinate conversion, pose extra
 bounded asynchronous tracking, diagnostic values, geometric triangle warping, continuous
 reference interpolation, feathered masks, compositing invariants, and both UI shells. Tests
 also cover temporal geometry, expression and weight transitions, bounded tracking holds,
-and the controlled MP4 contract. No webcam, GPU, or recorded real-person face data is
+the controlled MP4 contract, neural adapter output validation, reference feature caching,
+and renderer selection. No webcam, GPU, model weights, or recorded real-person face data is
 needed.
 
 Run the optional physical-camera benchmark after closing other camera applications:
@@ -158,7 +163,9 @@ local color matching and immutable alpha composition.
 `app/stabilization/temporal.py` owns time-based smoothing and short-gap recovery. The
 repeatable fixture generator is `tools/test_clips/generate_controlled_motion.py`, and
 `tools/benchmarks/temporal_pipeline.py` compares the complete local pipeline with smoothing
-enabled or disabled.
+enabled or disabled. `app/rendering/neural.py` owns the optional portrait-runtime adapter,
+reference appearance cache, and provider loader. `tools/benchmarks/neural_adapter.py`
+measures adapter overhead without claiming model inference performance.
 
 Responsive UI checks cover wide (three-column), medium (two-column), and compact
 (single-column scrolling) window geometries. When changing shell cards or typography,
@@ -167,5 +174,6 @@ workspace gains a vertical scrollbar instead of shrinking its contents.
 
 Inspect code before each milestone, state a plan, implement only that milestone,
 add applicable tests, run checks, update docs, and stop for the next instruction.
-The runtime must keep processing local. Do not add portrait-rendering or native-camera
-packages until their dedicated milestones. No installer is produced in Milestones 2–6.
+The runtime must keep processing local. Neural providers and weight files require explicit
+dependency, performance, and license review before packaging. No installer is produced in
+Milestones 2–7.

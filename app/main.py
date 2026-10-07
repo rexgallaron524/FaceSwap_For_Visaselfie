@@ -17,6 +17,7 @@ from app.compositing.protocol import Compositor
 from app.config import AppConfig, ConfigError, load_config
 from app.diagnostics.logging_setup import close_logging, configure_logging
 from app.reference.protocol import ReferenceSelector
+from app.rendering import create_renderer_factory
 from app.rendering.protocol import FaceRenderer
 from app.stabilization.protocol import Stabilizer
 from app.tracking import MediaPipeFaceTracker
@@ -46,7 +47,7 @@ def create_application(
         camera_source_factory or OpenCVCameraSource,
         face_tracker_factory or MediaPipeFaceTracker,
         reference_selector,
-        face_renderer_factory,
+        face_renderer_factory or create_renderer_factory(config.renderer),
         compositor,
         stabilizer,
     )

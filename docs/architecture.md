@@ -2,19 +2,21 @@
 
 ## Status and scope
 
-Milestones 2 through 6 implement the desktop shell, physical-camera preview, asynchronous
+Milestones 2 through 7 implement the desktop shell, physical-camera preview, asynchronous
 single-face tracking, diagnostics, local reference enrollment, continuous pose-space
 selection, and deterministic geometric face replacement. Tracking produces the
 backend-independent `FaceState`; selected references are warped to its landmark mesh and
 composited through a feathered facial mask. Temporal stabilization now covers geometry,
-expressions, and selection weights; virtual output remains planned. Target
+expressions, and selection weights. Milestone 7 adds an optional neural-renderer adapter,
+runtime boundary, and configuration selection while retaining geometry as the default;
+virtual output remains planned. Target
 platform: Windows 11 x64, initial input/output 1280×720 at 30 FPS.
 
 Python 3.12 is the tested minor version. PySide6 supplies the desktop UI, NumPy supplies
 common image types, and OpenCV with `cv2-enumerate-cameras` supplies the current Windows
 camera adapter. MediaPipe Face Landmarker runs in live-stream mode for tracking and image
-mode for enrollment. Neural portrait rendering and native output dependencies remain
-deferred. Importing modules never opens hardware or initializes either landmarker.
+mode for enrollment. No neural model dependency or weight is bundled. Native output remains
+deferred. Importing modules never opens hardware, a model provider, or either landmarker.
 
 ## Intended pipeline
 
@@ -50,7 +52,7 @@ lifecycles. Do not feed the FaceLive output back into its own input.
 | `FaceTracker` | `app/tracking/protocol.py` | Submit frames asynchronously and retrieve newest result without leaking backend types |
 | `ReferenceLibrary` | `app/reference/protocol.py` | Load/validate/align/cache references once, expose immutable snapshots, clear |
 | `ReferenceSelector` | `app/reference/protocol.py` | Produce continuous normalized weights for pose/expression |
-| `FaceRenderer` | `app/rendering/protocol.py` | Render a face and mask; deterministic implementation first, swappable backend later |
+| `FaceRenderer` | `app/rendering/protocol.py` | Render a face and mask through the configured geometric or optional neural backend |
 | `Compositor` | `app/compositing/protocol.py` | Blend into the matching original frame, preserving pixels outside the mask |
 | `Stabilizer` | `app/stabilization/protocol.py` | Smooth geometry/expression, preserve identity/time, reset history |
 | `FrameSink` | `app/pipeline/protocol.py` | Accept completed frames without blocking or accumulating latency |
@@ -60,9 +62,10 @@ runtime validators. `OpenCVCameraSource` implements camera input and
 `MediaPipeFaceTracker` implements bounded live tracking. `ReferenceLibraryStore`
 implements the stable `ReferenceLibrary` surface plus enrollment, persistence, and
 slot-management operations. `PoseSpaceReferenceSelector` implements continuous selection.
-`GeometricFaceRenderer` and `AlphaFaceCompositor` implement the first deterministic output
-path. `TemporalStabilizer` implements time-based geometry, expression, and weight smoothing
-plus a bounded tracking hold. Other stages accompany their milestones.
+`GeometricFaceRenderer` and `AlphaFaceCompositor` implement the deterministic output path.
+`NeuralFaceRenderer` adapts an optional `PortraitAnimationRuntime` to the same output
+contract. `TemporalStabilizer` implements time-based geometry, expression, and weight
+smoothing plus a bounded tracking hold. Other stages accompany their milestones.
 
 The data records are in `app/pipeline/types.py`. Qt, MediaPipe, OpenCV, and Windows
 objects must remain inside adapters. Stage failures use `StageError`; programming
@@ -91,6 +94,10 @@ errors must be logged and handled at the orchestration boundary as processing fa
   Compositing produces a new frame and preserves original pixels wherever alpha is zero.
 - Reference arrays and landmarks refer to aligned reference-image coordinates and
   remain cached until the library is cleared. Expensive preprocessing never runs per frame.
+- A neural runtime receives opaque cached appearance objects through
+  `WeightedAppearance`. `NeuralFaceRenderer` prepares each `PreparedReference` once per
+  object lifetime, invalidates only replaced or removed references, and releases cached
+  device resources when it closes. Model tensors never enter pipeline records or UI code.
 - Enrollment images are converted to unmirrored RGB, validated by a detector adapter, and
   aligned from their eye landmarks into a 512×512 immutable image. The cached landmark
   schema is `mediapipe-face-landmarker-478-v1`. Renderer code must check that schema before
@@ -212,9 +219,10 @@ errors must be logged and handled at the orchestration boundary as processing fa
   timestamp match. Tracking latency is submission-to-callback time from `monotonic_ns`.
 - Reference selection is a small synchronous calculation on each matched tracked result.
   It does not rerun enrollment preprocessing or create another queue. In processed preview
-  mode, the selected cached pixels and landmarks feed geometric rendering and compositing.
+  mode, the selected cached appearance and landmarks feed the configured renderer and
+  compositing.
   Original and diagnostic modes skip those two stages.
-- Geometric rendering and compositing currently execute synchronously after a matched
+- Rendering and compositing currently execute synchronously after a matched
   tracking result. No processed-frame queue exists: a new camera frame is submitted only
   through the tracker's existing one-frame backpressure path. Stage timings use
   `perf_counter_ns`; complete-frame time starts when that retained frame is submitted for
@@ -230,6 +238,24 @@ errors must be logged and handled at the orchestration boundary as processing fa
   and restart. Reconfiguration must quiesce callbacks before replacing references.
 - Sink `False` means dropped/unconsumed, not a processing failure. Consumer disconnect
   does not stop preview. No unbounded queue, including the UI delivery queue, is allowed.
+
+### Optional neural runtime
+
+- `renderer.backend` selects `geometric` or `liveportrait` at the composition root. The UI
+  receives only a `FaceRenderer`; it never imports or branches on model code. Geometric is
+  the default and remains available for diagnostics and fallback comparison.
+- `NeuralFaceRenderer` owns cache synchronization and contract validation.
+  `PortraitAnimationRuntime` owns model loading, reference feature extraction, inference,
+  and release of opaque device state. `PythonModulePortraitRuntime` imports the explicitly
+  configured local provider only when the neural backend opens.
+- A provider factory receives only model directory and device preference. It may use an
+  isolated local worker so LivePortrait's Python/CUDA dependencies do not enter the PySide6
+  environment. Network inference is outside the architecture.
+- Runtime output must preserve `FaceState` frame ID/timestamp and publish full-frame RGB
+  plus finite facial alpha. It may not composite body or background. This keeps output
+  behavior identical across geometric and neural implementations.
+- Adapter metrics separate reference preparation from per-frame inference. UI rendering,
+  compositing, and complete-frame timing remain independent pipeline measurements.
 
 ### Desktop layout
 
@@ -302,6 +328,14 @@ dropout, smoothing produced 25/25 outputs by holding exactly three frames, while
 produced 22/25. Full parameters, p95 values, commands, and remaining artifacts are recorded
 in `docs/milestone_6.md`.
 
+Milestone 7 re-ran the same controlled movement segment at 8.34 FPS with smoothing,
+19.64 ms mean tracking latency, 96.58 ms mean post-tracking processing, and 119.19 ms mean
+total latency. It adds a model-free adapter benchmark to quantify cache and full-frame
+contract overhead. No local neural inference result is claimed because the evaluated system
+has no NVIDIA runtime, PyTorch, provider, or weights. LivePortrait reports 12.8 ms for its
+model modules on an RTX 4090; that is a hardware-specific model measurement rather than an
+end-to-end FaceLive result. See `docs/milestone_7.md` for the quality and licensing decision.
+
 After the preview pipeline is stable, implement a C++ Media Foundation custom Media
 Source registered using `MFCreateVirtualCamera`, based on Microsoft's Windows Camera
 sample. Keep all ML/image processing outside that layer. A versioned shared-memory
@@ -315,8 +349,10 @@ and ABI details require their own milestone. `FrameSink` is a Python abstraction
 - [Qt for Python setup](https://doc.qt.io/qtforpython-6/gettingstarted.html)
 - [MediaPipe Face Landmarker for Python](https://developers.google.com/edge/mediapipe/solutions/vision/face_landmarker/python)
 - [MediaPipe Face Landmarker models](https://developers.google.com/edge/mediapipe/solutions/vision/face_landmarker/index#models)
+- [LivePortrait repository](https://github.com/KlingAIResearch/LivePortrait)
+- [LivePortrait paper](https://arxiv.org/abs/2407.03168)
 - [uv Python provisioning](https://docs.astral.sh/uv/guides/install-python/)
 
-Milestone 6 found deterministic geometry sufficient for pipeline validation but insufficient
-for final visual quality. Neural refinement remains deferred until an explicit instruction
-for its milestone.
+Milestone 7 confirms deterministic geometry is sufficient for pipeline validation but not
+for final visual quality. The neural adapter is ready for a separately licensed local
+provider; model integration and distribution remain explicit future work.

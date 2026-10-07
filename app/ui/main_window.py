@@ -826,7 +826,7 @@ class MainWindow(QMainWindow):
             if rendering_error is None:
                 self._set_rendering_state("Ready", "running")
                 self.statusBar().showMessage(
-                    "Camera, face tracking, and geometric processing are running."
+                    "Camera, face tracking, and configured face rendering are running."
                 )
             else:
                 self._rendering_failed = True
@@ -1029,8 +1029,8 @@ class MainWindow(QMainWindow):
             self.rendering_latency_label.setText("—")
             self.compositing_latency_label.setText("—")
             self.complete_frame_latency_label.setText("—")
-            self.statusBar().showMessage(f"Geometric processing skipped: {exc}")
-            self._logger.warning("Geometric face processing failed: %s", exc)
+            self.statusBar().showMessage(f"Face rendering skipped: {exc}")
+            self._logger.warning("Face rendering failed: %s", exc)
             return
         self._last_processed_image = self._frame_image(output)
         self._set_rendering_state("Processed", "running")

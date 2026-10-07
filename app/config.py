@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+import re
 import tomllib
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -20,6 +21,10 @@ def default_app_data_directory() -> Path:
 
 def default_log_directory() -> Path:
     return default_app_data_directory() / "logs"
+
+
+def default_liveportrait_model_directory() -> Path:
+    return default_app_data_directory() / "models" / "liveportrait"
 
 
 def _positive_integer(name: str, value: object) -> None:
@@ -55,9 +60,30 @@ class LoggingConfig:
 
 
 @dataclass(frozen=True, slots=True)
+class RendererConfig:
+    backend: str = "geometric"
+    runtime_module: str = "facelive_liveportrait"
+    model_directory: Path = field(default_factory=default_liveportrait_model_directory)
+    device: str = "auto"
+
+    def __post_init__(self) -> None:
+        if self.backend not in ("geometric", "liveportrait"):
+            raise ConfigError("renderer.backend must be geometric or liveportrait")
+        if not isinstance(self.runtime_module, str) or not re.fullmatch(
+            r"[A-Za-z_]\w*(?:\.[A-Za-z_]\w*)*", self.runtime_module
+        ):
+            raise ConfigError("renderer.runtime_module must be a dotted Python module name")
+        if not isinstance(self.model_directory, Path):
+            raise ConfigError("renderer.model_directory must be a Path")
+        if self.device not in ("auto", "cpu", "cuda"):
+            raise ConfigError("renderer.device must be auto, cpu, or cuda")
+
+
+@dataclass(frozen=True, slots=True)
 class AppConfig:
     video: VideoConfig = field(default_factory=VideoConfig)
     logging: LoggingConfig = field(default_factory=LoggingConfig)
+    renderer: RendererConfig = field(default_factory=RendererConfig)
     debug: bool = False
 
     def __post_init__(self) -> None:
@@ -88,12 +114,13 @@ def load_config(path: Path | None = None) -> AppConfig:
             data = tomllib.load(stream)
     except (OSError, ValueError) as exc:
         raise ConfigError(f"Cannot read configuration {path}: {exc}") from exc
-    unknown = data.keys() - {"app", "video", "logging"}
+    unknown = data.keys() - {"app", "video", "logging", "renderer"}
     if unknown:
         raise ConfigError(f"Unknown configuration section(s): {', '.join(sorted(unknown))}")
     app = _table(data, "app", {"debug"})
     video = _table(data, "video", {"width", "height", "fps"})
     logging = _table(data, "logging", {"level", "directory", "max_bytes", "backup_count"})
+    renderer = _table(data, "renderer", {"backend", "runtime_module", "model_directory", "device"})
     if "directory" in logging:
         raw = logging["directory"]
         if not isinstance(raw, str) or not raw.strip():
@@ -102,4 +129,19 @@ def load_config(path: Path | None = None) -> AppConfig:
         logging["directory"] = (
             directory if directory.is_absolute() else path.resolve().parent / directory
         )
-    return AppConfig(video=VideoConfig(**video), logging=LoggingConfig(**logging), **app)
+    if "model_directory" in renderer:
+        raw = renderer["model_directory"]
+        if not isinstance(raw, str) or not raw.strip():
+            raise ConfigError("renderer.model_directory must be a nonempty path string")
+        model_directory = Path(raw).expanduser()
+        renderer["model_directory"] = (
+            model_directory
+            if model_directory.is_absolute()
+            else path.resolve().parent / model_directory
+        )
+    return AppConfig(
+        video=VideoConfig(**video),
+        logging=LoggingConfig(**logging),
+        renderer=RendererConfig(**renderer),
+        **app,
+    )

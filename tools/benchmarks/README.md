@@ -26,3 +26,14 @@ and frames recovered by the bounded tracking hold.
 
 Use `--start-frame 210 --max-frames 30 --warmup-frames 5` to isolate the controlled dropout
 segment. `--max-frames 90 --warmup-frames 10` gives a shorter translation/pose comparison.
+
+Milestone 7 adds a contract-only benchmark for the optional neural adapter. It validates
+reference caching and measures full-frame adapter overhead without installing or pretending
+to benchmark a neural model:
+
+```powershell
+.\.venv\Scripts\python.exe tools\benchmarks\neural_adapter.py
+```
+
+Actual model inference is reported by `NeuralFaceRenderer.metrics.inference_ms` when a local
+provider is installed.
