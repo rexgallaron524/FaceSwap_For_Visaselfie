@@ -10,8 +10,10 @@
   live mouth-smile blendshapes.
 - Finite, nonnegative, normalized `ReferenceWeight` outputs in stable library order.
 - Graceful selection from incomplete libraries by using the remaining pose anchors.
-- A live two-column bar visualization for every configured reference slot, including
+- A live label/bar/percentage visualization for every configured reference slot, including
   current yaw, pitch, and smile diagnostics.
+- A responsive shell that uses the three-column control/preview/diagnostics layout on wide
+  screens and scroll-safe medium or compact layouts without clipping measurement rows.
 
 Selection runs after an asynchronous tracking result is matched to its exact camera frame.
 It reads cached `PreparedReference` metadata and does not process reference pixels again.

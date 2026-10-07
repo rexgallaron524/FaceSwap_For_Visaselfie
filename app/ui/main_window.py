@@ -7,7 +7,18 @@ from collections.abc import Callable
 from concurrent.futures import Future, ThreadPoolExecutor
 
 from PySide6.QtCore import QEvent, QPointF, QRectF, Qt, QTimer
-from PySide6.QtGui import QAction, QCloseEvent, QColor, QImage, QPainter, QPen, QPixmap, QTransform
+from PySide6.QtGui import (
+    QAction,
+    QCloseEvent,
+    QColor,
+    QFont,
+    QImage,
+    QPainter,
+    QPen,
+    QPixmap,
+    QResizeEvent,
+    QTransform,
+)
 from PySide6.QtWidgets import (
     QCheckBox,
     QComboBox,
@@ -18,6 +29,8 @@ from PySide6.QtWidgets import (
     QLabel,
     QMainWindow,
     QPushButton,
+    QScrollArea,
+    QSizePolicy,
     QVBoxLayout,
     QWidget,
 )
@@ -68,6 +81,7 @@ class MainWindow(QMainWindow):
         self._pending_tracking_image: tuple[int, int, QImage] | None = None
         self._tracking_drops = 0
         self._tracking_failed = False
+        self._layout_mode: str | None = None
         self._metrics = CaptureMetrics()
         self._logger = logging.getLogger("facelive.ui")
         self._reference_library = ReferenceLibraryStore()
@@ -83,12 +97,14 @@ class MainWindow(QMainWindow):
         self._open_future: Future[tuple[FrameFormat, str | None]] | None = None
 
         self.setWindowTitle("FaceLive")
-        self.resize(1120, 740)
-        self.setMinimumSize(900, 700)
+        self.resize(1440, 900)
+        self.setMinimumSize(720, 620)
+        window_font = QFont("Segoe UI Variable")
+        window_font.setPointSizeF(10.5)
+        self.setFont(window_font)
         self.setStyleSheet("""
             * {
                 font-family: "Segoe UI Variable", "Segoe UI";
-                font-size: 14px;
             }
             QMainWindow, QDialog, QMessageBox, QWidget#shell, QWidget#referenceGrid {
                 background: #0b1017;
@@ -97,26 +113,28 @@ class MainWindow(QMainWindow):
             QLabel { color: #f4f7fb; background: transparent; }
             QLabel#title {
                 color: #ffffff;
-                font-size: 30px;
+                font-size: 22pt;
                 font-weight: 700;
             }
             QLabel#subtitle {
                 color: #c4ced9;
-                font-size: 15px;
+                font-size: 11pt;
             }
             QLabel#hint { color: #b5c0cd; }
             QLabel#fieldLabel, QLabel#metricLabel {
                 color: #c9d3de;
                 font-weight: 500;
             }
-            QLabel#weightLabel { color: #c8d5e5; font-size: 12px; }
-            QProgressBar#referenceWeight {
+            QLabel#weightLabel { color: #c8d5e5; font-size: 9pt; }
+            QLabel#weightValue {
                 color: #f7fbff;
+                font-size: 9pt;
+                font-weight: 600;
+            }
+            QProgressBar#referenceWeight {
                 background: #111a25;
                 border: 1px solid #34465b;
                 border-radius: 5px;
-                font-size: 11px;
-                text-align: center;
             }
             QProgressBar#referenceWeight::chunk {
                 background: #2688e8;
@@ -124,12 +142,12 @@ class MainWindow(QMainWindow):
             }
             QLabel#metricValue {
                 color: #ffffff;
-                font-size: 16px;
+                font-size: 11pt;
                 font-weight: 700;
             }
             QLabel#stateValue {
                 color: #d6dee8;
-                font-size: 16px;
+                font-size: 11pt;
                 font-weight: 700;
             }
             QLabel#stateValue[state="running"] { color: #5ee6a8; }
@@ -141,8 +159,8 @@ class MainWindow(QMainWindow):
                 background: #151c25;
                 border: 1px solid #344252;
                 border-radius: 12px;
-                margin-top: 17px;
-                padding: 18px;
+                margin-top: 14px;
+                padding: 0;
                 font-weight: 600;
             }
             QGroupBox::title {
@@ -227,12 +245,12 @@ class MainWindow(QMainWindow):
             }
             QLabel#previewImage {
                 color: #d3dce6;
-                font-size: 18px;
+                font-size: 12pt;
                 font-weight: 500;
             }
             QLabel#badge {
                 color: #79c7ff;
-                font-size: 13px;
+                font-size: 9pt;
                 font-weight: 700;
             }
             QStatusBar {
@@ -255,6 +273,10 @@ class MainWindow(QMainWindow):
             QScrollArea, QScrollArea > QWidget > QWidget {
                 background: #0b1017;
                 border: 0;
+            }
+            QScrollArea#weightScroll,
+            QScrollArea#weightScroll > QWidget > QWidget {
+                background: #151c25;
             }
             QFrame#referenceCard {
                 background: #151c25;
@@ -302,35 +324,46 @@ class MainWindow(QMainWindow):
         shell = QWidget()
         shell.setObjectName("shell")
         self.setCentralWidget(shell)
-        layout = QVBoxLayout(shell)
-        layout.setContentsMargins(30, 24, 30, 18)
-        layout.setSpacing(8)
+        self._shell_layout = QVBoxLayout(shell)
+        self._shell_layout.setContentsMargins(24, 20, 24, 14)
+        self._shell_layout.setSpacing(8)
 
         title = QLabel("FaceLive")
         title.setObjectName("title")
-        layout.addWidget(title)
+        self._shell_layout.addWidget(title)
         subtitle = QLabel("Live physical-camera preview")
         subtitle.setObjectName("subtitle")
-        layout.addWidget(subtitle)
+        self._shell_layout.addWidget(subtitle)
 
-        content = QHBoxLayout()
-        content.setSpacing(24)
-        content.setContentsMargins(0, 16, 0, 0)
-        controls = QVBoxLayout()
-        controls.setSpacing(16)
-        sources = QGroupBox("Camera input")
-        sources.setFixedWidth(300)
-        sources.setMinimumHeight(250)
-        source_layout = QVBoxLayout(sources)
+        self._content_scroll = QScrollArea()
+        self._content_scroll.setObjectName("workspaceScroll")
+        self._content_scroll.setWidgetResizable(True)
+        self._content_scroll.setFrameShape(QFrame.Shape.NoFrame)
+        self._content_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        self._content_scroll.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
+        self._content_host = QWidget()
+        self._content_host.setObjectName("contentHost")
+        self._content_layout = QGridLayout(self._content_host)
+        self._content_layout.setContentsMargins(0, 12, 0, 0)
+        self._content_layout.setHorizontalSpacing(18)
+        self._content_layout.setVerticalSpacing(16)
+        self._content_scroll.setWidget(self._content_host)
+        self._shell_layout.addWidget(self._content_scroll, 1)
+
+        self.camera_card = QGroupBox("Camera input")
+        self.camera_card.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Maximum)
+        source_layout = QVBoxLayout(self.camera_card)
         source_layout.setContentsMargins(18, 22, 18, 18)
         source_layout.setSpacing(11)
         camera_label = QLabel("Physical camera")
         camera_label.setObjectName("fieldLabel")
+        camera_label.setMinimumHeight(24)
         source_layout.addWidget(camera_label)
         self.camera_selector = QComboBox()
         self.camera_selector.setEnabled(False)
         source_layout.addWidget(self.camera_selector)
         camera_buttons = QHBoxLayout()
+        camera_buttons.setSpacing(10)
         self.refresh_button = QPushButton("Refresh")
         self.refresh_button.setObjectName("secondaryButton")
         self.refresh_button.clicked.connect(self.refresh_cameras)
@@ -362,11 +395,11 @@ class MainWindow(QMainWindow):
         )
         self.diagnostic_overlay_toggle.toggled.connect(self._render_last_image)
         source_layout.addWidget(self.diagnostic_overlay_toggle)
-        controls.addWidget(sources)
-
-        references = QGroupBox("Reference library")
-        references.setMinimumHeight(155)
-        reference_layout = QVBoxLayout(references)
+        self.reference_library_card = QGroupBox("Reference library")
+        self.reference_library_card.setSizePolicy(
+            QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Maximum
+        )
+        reference_layout = QVBoxLayout(self.reference_library_card)
         reference_layout.setContentsMargins(18, 22, 18, 18)
         reference_layout.setSpacing(9)
         self.load_references = QPushButton("Manage references…")
@@ -379,8 +412,6 @@ class MainWindow(QMainWindow):
         reference_hint.setObjectName("hint")
         reference_hint.setWordWrap(True)
         reference_layout.addWidget(reference_hint)
-        controls.addWidget(references)
-
         # These controls remain part of the stable shell API but are not shown until
         # their implementation milestones.
         self.replacement_toggle = QCheckBox("Enable face replacement", self)
@@ -389,32 +420,36 @@ class MainWindow(QMainWindow):
         self.virtual_camera_button = QPushButton("Start virtual camera", self)
         self.virtual_camera_button.setEnabled(False)
         self.virtual_camera_button.hide()
-        controls.addStretch()
-        content.addLayout(controls)
-
-        preview_column = QVBoxLayout()
-        preview_column.setSpacing(12)
+        self.preview_card = QWidget()
+        self.preview_card.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
+        preview_column = QVBoxLayout(self.preview_card)
+        preview_column.setContentsMargins(0, 0, 0, 0)
+        preview_column.setSpacing(8)
         preview_heading = QLabel("LIVE PREVIEW")
         preview_heading.setObjectName("badge")
+        preview_heading.setMinimumHeight(22)
         preview_column.addWidget(preview_heading)
-        preview = QFrame()
-        preview.setObjectName("preview")
-        preview_layout = QVBoxLayout(preview)
+        self.preview_frame = QFrame()
+        self.preview_frame.setObjectName("preview")
+        self.preview_frame.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
+        preview_layout = QVBoxLayout(self.preview_frame)
         preview_layout.setContentsMargins(8, 8, 8, 8)
         self.preview_image = QLabel("Searching for physical cameras…")
         self.preview_image.setObjectName("previewImage")
         self.preview_image.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self.preview_image.setMinimumSize(320, 180)
+        self.preview_image.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
         self.preview_image.installEventFilter(self)
         preview_layout.addWidget(self.preview_image)
-        preview_column.addWidget(preview, 1)
+        preview_column.addWidget(self.preview_frame, 1)
 
-        metrics = QGroupBox("Live diagnostics")
-        metrics.setObjectName("metricsCard")
-        metrics_layout = QGridLayout(metrics)
+        self.diagnostics_card = QGroupBox("Live diagnostics")
+        self.diagnostics_card.setObjectName("metricsCard")
+        self.diagnostics_card.setMinimumHeight(370)
+        metrics_layout = QGridLayout(self.diagnostics_card)
         metrics_layout.setContentsMargins(18, 22, 18, 18)
-        metrics_layout.setHorizontalSpacing(16)
-        metrics_layout.setVerticalSpacing(7)
+        metrics_layout.setHorizontalSpacing(18)
+        metrics_layout.setVerticalSpacing(5)
         self.capture_state_label = QLabel("Idle")
         self.capture_state_label.setObjectName("stateValue")
         self.capture_state_label.setProperty("state", "idle")
@@ -439,72 +474,57 @@ class MainWindow(QMainWindow):
         self.tracking_drops_label.setObjectName("metricValue")
         self.preview_drops_label = QLabel("0")
         self.preview_drops_label.setObjectName("metricValue")
-        state_label = QLabel("State")
-        state_label.setObjectName("metricLabel")
-        fps_label = QLabel("Capture FPS")
-        fps_label.setObjectName("metricLabel")
-        tracking_label = QLabel("Face tracking")
-        tracking_label.setObjectName("metricLabel")
-        confidence_label = QLabel("Confidence")
-        confidence_label.setObjectName("metricLabel")
-        pose_label = QLabel("Yaw · pitch · roll")
-        pose_label.setObjectName("metricLabel")
-        smile_label = QLabel("Smile")
-        smile_label.setObjectName("metricLabel")
-        eyes_label = QLabel("Eye closure L · R")
-        eyes_label.setObjectName("metricLabel")
-        mouth_label = QLabel("Mouth activity")
-        mouth_label.setObjectName("metricLabel")
-        latency_label = QLabel("Tracking latency")
-        latency_label.setObjectName("metricLabel")
-        tracker_drops_label = QLabel("Tracker drops")
-        tracker_drops_label.setObjectName("metricLabel")
-        drops_label = QLabel("Preview skips")
-        drops_label.setObjectName("metricLabel")
-        metrics_layout.addWidget(state_label, 0, 0)
-        metrics_layout.addWidget(self.capture_state_label, 0, 1)
-        metrics_layout.addWidget(tracking_label, 0, 2)
-        metrics_layout.addWidget(self.tracking_state_label, 0, 3)
-        metrics_layout.addWidget(fps_label, 1, 0)
-        metrics_layout.addWidget(self.capture_fps_label, 1, 1)
-        metrics_layout.addWidget(confidence_label, 1, 2)
-        metrics_layout.addWidget(self.tracking_confidence_label, 1, 3)
-        metrics_layout.addWidget(pose_label, 2, 0)
-        metrics_layout.addWidget(self.head_pose_label, 2, 1, 1, 3)
-        metrics_layout.addWidget(smile_label, 3, 0)
-        metrics_layout.addWidget(self.smile_label, 3, 1)
-        metrics_layout.addWidget(eyes_label, 3, 2)
-        metrics_layout.addWidget(self.eye_closure_label, 3, 3)
-        metrics_layout.addWidget(mouth_label, 4, 0)
-        metrics_layout.addWidget(self.mouth_activity_label, 4, 1)
-        metrics_layout.addWidget(latency_label, 4, 2)
-        metrics_layout.addWidget(self.tracking_latency_label, 4, 3)
-        metrics_layout.addWidget(drops_label, 5, 0)
-        metrics_layout.addWidget(self.preview_drops_label, 5, 1)
-        metrics_layout.addWidget(tracker_drops_label, 5, 2)
-        metrics_layout.addWidget(self.tracking_drops_label, 5, 3)
+        rows = (
+            ("Capture state", self.capture_state_label),
+            ("Capture FPS", self.capture_fps_label),
+            ("Face tracking", self.tracking_state_label),
+            ("Confidence", self.tracking_confidence_label),
+            ("Yaw · pitch · roll", self.head_pose_label),
+            ("Smile", self.smile_label),
+            ("Eye closure L · R", self.eye_closure_label),
+            ("Mouth activity", self.mouth_activity_label),
+            ("Tracking latency", self.tracking_latency_label),
+            ("Preview skips", self.preview_drops_label),
+            ("Tracker drops", self.tracking_drops_label),
+        )
+        for row, (label_text, value_widget) in enumerate(rows):
+            label = QLabel(label_text)
+            label.setObjectName("metricLabel")
+            label.setMinimumHeight(25)
+            label.setAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter)
+            value_widget.setMinimumHeight(25)
+            value_widget.setAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter)
+            metrics_layout.addWidget(label, row, 0)
+            metrics_layout.addWidget(value_widget, row, 1)
+            metrics_layout.setRowMinimumHeight(row, 25)
         metrics_layout.setColumnStretch(1, 1)
-        metrics_layout.setColumnStretch(3, 1)
-        preview_column.addWidget(metrics)
+        metrics_layout.setColumnMinimumWidth(0, 135)
 
-        selection = QGroupBox("Reference selection")
-        selection.setObjectName("metricsCard")
-        selection_layout = QVBoxLayout(selection)
+        self.reference_selection_card = QGroupBox("Reference selection")
+        self.reference_selection_card.setObjectName("metricsCard")
+        self.reference_selection_card.setMinimumHeight(290)
+        selection_layout = QVBoxLayout(self.reference_selection_card)
         selection_layout.setContentsMargins(18, 22, 18, 14)
-        selection_layout.setSpacing(7)
+        selection_layout.setSpacing(8)
         self.reference_selection_status = QLabel("No enrolled references")
         self.reference_selection_status.setObjectName("hint")
+        self.reference_selection_status.setMinimumHeight(24)
+        self.reference_selection_status.setWordWrap(True)
         self.reference_weight_view = ReferenceWeightsWidget()
         selection_layout.addWidget(self.reference_selection_status)
-        selection_layout.addWidget(self.reference_weight_view)
-        preview_column.addWidget(selection)
-
-        content.addLayout(preview_column, 1)
-        layout.addLayout(content, 1)
+        weight_scroll = QScrollArea()
+        weight_scroll.setObjectName("weightScroll")
+        weight_scroll.setWidgetResizable(True)
+        weight_scroll.setFrameShape(QFrame.Shape.NoFrame)
+        weight_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        weight_scroll.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
+        weight_scroll.setWidget(self.reference_weight_view)
+        selection_layout.addWidget(weight_scroll, 1)
 
         footer = QLabel("Milestone 4 · Continuous pose-space reference selection")
         footer.setObjectName("hint")
-        layout.addWidget(footer)
+        self._shell_layout.addWidget(footer)
+        self._apply_responsive_layout(self.width())
         self._update_reference_summary()
         self.statusBar().showMessage("Idle — no camera is open.")
 
@@ -512,6 +532,82 @@ class MainWindow(QMainWindow):
         quit_action.setShortcut("Ctrl+Q")
         quit_action.triggered.connect(self.close)
         self.menuBar().addMenu("File").addAction(quit_action)
+
+    def _layout_for_width(self, width: int) -> str:
+        if self._layout_mode == "wide":
+            return "wide" if width >= 1340 else ("medium" if width >= 860 else "compact")
+        if self._layout_mode == "compact":
+            return "compact" if width <= 940 else ("wide" if width >= 1420 else "medium")
+        if self._layout_mode == "medium":
+            if width >= 1420:
+                return "wide"
+            return "compact" if width < 860 else "medium"
+        if width >= 1400:
+            return "wide"
+        return "medium" if width >= 900 else "compact"
+
+    def _apply_responsive_layout(self, width: int) -> None:
+        mode = self._layout_for_width(width)
+        if mode == self._layout_mode:
+            return
+        while self._content_layout.count():
+            self._content_layout.takeAt(0)
+        for index in range(5):
+            self._content_layout.setColumnMinimumWidth(index, 0)
+            self._content_layout.setColumnStretch(index, 0)
+            self._content_layout.setRowMinimumHeight(index, 0)
+            self._content_layout.setRowStretch(index, 0)
+
+        if mode == "wide":
+            self._shell_layout.setContentsMargins(24, 20, 24, 14)
+            self.preview_card.setMinimumHeight(520)
+            self._content_layout.addWidget(
+                self.camera_card, 0, 0, alignment=Qt.AlignmentFlag.AlignTop
+            )
+            self._content_layout.addWidget(
+                self.reference_library_card, 1, 0, alignment=Qt.AlignmentFlag.AlignTop
+            )
+            self._content_layout.addWidget(self.preview_card, 0, 1, 2, 1)
+            self._content_layout.addWidget(self.diagnostics_card, 0, 2)
+            self._content_layout.addWidget(self.reference_selection_card, 1, 2)
+            self._content_layout.setColumnMinimumWidth(0, 280)
+            self._content_layout.setColumnMinimumWidth(1, 520)
+            self._content_layout.setColumnMinimumWidth(2, 360)
+            self._content_layout.setColumnStretch(1, 1)
+            self._content_layout.setRowStretch(0, 3)
+            self._content_layout.setRowStretch(1, 2)
+        elif mode == "medium":
+            self._shell_layout.setContentsMargins(22, 18, 22, 14)
+            self.preview_card.setMinimumHeight(340)
+            self._content_layout.addWidget(
+                self.camera_card, 0, 0, alignment=Qt.AlignmentFlag.AlignTop
+            )
+            self._content_layout.addWidget(
+                self.reference_library_card, 1, 0, alignment=Qt.AlignmentFlag.AlignTop
+            )
+            self._content_layout.addWidget(self.preview_card, 0, 1)
+            self._content_layout.addWidget(self.diagnostics_card, 1, 1)
+            self._content_layout.addWidget(self.reference_selection_card, 2, 1)
+            self._content_layout.setColumnMinimumWidth(0, 270)
+            self._content_layout.setColumnMinimumWidth(1, 480)
+            self._content_layout.setColumnStretch(1, 1)
+        else:
+            self._shell_layout.setContentsMargins(16, 14, 16, 12)
+            self.preview_card.setMinimumHeight(280)
+            self._content_layout.addWidget(self.camera_card, 0, 0)
+            self._content_layout.addWidget(self.preview_card, 1, 0)
+            self._content_layout.addWidget(self.reference_library_card, 2, 0)
+            self._content_layout.addWidget(self.diagnostics_card, 3, 0)
+            self._content_layout.addWidget(self.reference_selection_card, 4, 0)
+            self._content_layout.setColumnStretch(0, 1)
+
+        self._layout_mode = mode
+        QTimer.singleShot(0, self._render_last_image)
+
+    def resizeEvent(self, event: QResizeEvent) -> None:  # noqa: N802
+        super().resizeEvent(event)
+        if hasattr(self, "_content_layout"):
+            self._apply_responsive_layout(event.size().width())
 
     def refresh_cameras(self) -> None:
         """Refresh device names while preserving the selected device when possible."""

@@ -48,6 +48,7 @@ def test_shell_starts_and_stops_deterministic_camera_preview(tmp_path):
     script = """
 import time
 import numpy as np
+from PySide6.QtWidgets import QLabel, QProgressBar
 from app.config import AppConfig
 from app.main import create_application
 from app.pipeline.types import (
@@ -110,6 +111,42 @@ window.show()
 application.processEvents()
 assert window.windowTitle() == 'FaceLive'
 assert window.isVisible()
+assert window._layout_mode == 'wide'
+assert window.camera_card.geometry().right() < window.preview_card.geometry().left()
+assert window.preview_card.geometry().right() < window.diagnostics_card.geometry().left()
+metric_labels = [
+    label for label in window.diagnostics_card.findChildren(QLabel)
+    if label.objectName() == 'metricLabel'
+]
+assert len(metric_labels) == 11
+assert all(label.height() >= label.fontMetrics().height() for label in metric_labels)
+assert all(
+    bar.minimumHeight() >= bar.fontMetrics().height()
+    for bar in window.reference_weight_view.findChildren(QProgressBar)
+)
+window.resize(1380, 900)
+application.processEvents()
+assert window._layout_mode == 'wide'
+window.resize(1330, 900)
+application.processEvents()
+assert window._layout_mode == 'medium'
+window.resize(1380, 900)
+application.processEvents()
+assert window._layout_mode == 'medium'
+window.resize(1100, 800)
+application.processEvents()
+assert window._layout_mode == 'medium'
+assert window.camera_card.geometry().right() < window.preview_card.geometry().left()
+assert window.preview_card.geometry().bottom() < window.diagnostics_card.geometry().top()
+window.resize(760, 700)
+application.processEvents()
+assert window._layout_mode == 'compact'
+assert window.camera_card.geometry().bottom() < window.preview_card.geometry().top()
+assert window.preview_card.geometry().bottom() < window.reference_library_card.geometry().top()
+assert window._content_scroll.verticalScrollBar().maximum() > 0
+window.resize(1440, 900)
+application.processEvents()
+assert window._layout_mode == 'wide'
 assert window.camera_selector.isEnabled()
 assert window.camera_selector.currentText() == 'Test Camera'
 assert window.capture_button.isEnabled()

@@ -140,6 +140,11 @@ pose, blendshape-name, and confidence helpers. Keep MediaPipe objects inside the
 `app/reference/selector.py` owns the deterministic pose/expression interpolation. The live
 developer visualization is `app/ui/reference_weights.py`.
 
+Responsive UI checks cover wide (three-column), medium (two-column), and compact
+(single-column scrolling) window geometries. When changing shell cards or typography,
+verify that diagnostic rows meet their font height, cards do not overlap, and the compact
+workspace gains a vertical scrollbar instead of shrinking its contents.
+
 Inspect code before each milestone, state a plan, implement only that milestone,
 add applicable tests, run checks, update docs, and stop for the next instruction.
 The runtime must keep processing local. Do not add portrait-rendering or native-camera

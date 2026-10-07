@@ -199,6 +199,21 @@ errors must be logged and handled at the orchestration boundary as processing fa
 - Sink `False` means dropped/unconsumed, not a processing failure. Consumer disconnect
   does not stop preview. No unbounded queue, including the UI delivery queue, is allowed.
 
+### Desktop layout
+
+- At wide logical widths, the workspace uses three columns: camera/library controls,
+  a full-height preview, and diagnostics/reference weights. The preview column receives
+  all additional horizontal space.
+- At medium widths, controls remain in a left rail while preview, diagnostics, and weights
+  form a readable vertical sequence on the right. Compact widths use one column. Explicit
+  breakpoints with hysteresis prevent repeated layout changes around a threshold.
+- The workspace scrolls vertically whenever its cards do not fit. Cards retain their
+  readable minimum sizes rather than compressing rows, clipping values, or overlapping
+  controls. Horizontal scrolling is not part of the normal layout.
+- UI typography uses point-based sizing and each diagnostic/weight row reserves at least
+  its rendered font height. Group-box content spacing belongs to its layout margins rather
+  than stylesheet padding, avoiding double padding and unstable size hints.
+
 ## Failure policy
 
 Product decision: output a configured placeholder whenever a valid processed frame
